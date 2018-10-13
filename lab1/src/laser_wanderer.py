@@ -66,7 +66,7 @@ class LaserWanderer:
     pa = PoseArray()
     pa.header.frame_id = '/map'
     pa.header.stamp = rospy.Time.now()
-
+    self.current_pose = [msg.pose.position.x,msg.pose.position.y,utils.quaternion_to_angle(msg.pose.orientation)]
     # Transform the last pose of each trajectory to be w.r.t the world and insert into
     # the pose array
     # YOUR CODE HERE
@@ -111,10 +111,10 @@ class LaserWanderer:
     #   minimum (or maximum) laser scan angle
     #   What if the corresponding laser measurement is NAN?
     # NOTE THAT NO COORDINATE TRANSFORMS ARE NECESSARY INSIDE OF THIS FUNCTION
-
+    #rospy.loginfo('%s' % rollout_pose)
     # YOUR CODE HERE
     cost = np.absolute(delta)
-    current_pose = self.rollouts[0][0]
+    current_pose = [0,0,0]
     rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
     rollout_pose_distance = np.linalg.norm(np.array(current_pose[:-1]) - np.array(rollout_pose[:-1]))
 
@@ -122,9 +122,9 @@ class LaserWanderer:
     if rollout_pose_angle < laser_msg.angle_min or rollout_pose_angle > laser_msg.angle_max:
         cost += MAX_PENALTY
         return cost
-        
     angle_index = (int) ((rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment)
     laser_ray_dist = laser_msg.ranges[angle_index]
+    #rospy.loginfo("dist: %s (wanted_pose: %s)| laser_ray_dist: %s" % (rollout_pose_distance,rollout_pose,laser_ray_dist ))
     if np.isfinite(laser_ray_dist) and rollout_pose_distance > (laser_ray_dist - np.abs(self.laser_offset)):
         cost += MAX_PENALTY
         return cost
@@ -155,13 +155,14 @@ class LaserWanderer:
     #   traj_depth += 1
     # YOUR CODE HERE
     T = self.rollouts.shape[1]
-    while (rospy.Time.now().to_sec() - start > self.compute_time and traj_depth < T):
+    while (rospy.Time.now().to_sec() - start < self.compute_time and traj_depth < T):
         for n in range(self.rollouts.shape[0]):
-            delta_costs[n] += self.compute_cost(self.deltas[n], self.rollouts[n],msg)
+            delta_costs[n] += self.compute_cost(self.deltas[n], self.rollouts[n][traj_depth],msg)
         traj_depth += 1
 
     # Find the delta that has the smallest cost and execute it by publishing
     # YOUR CODE HERE
+    #rospy.loginfo("%s" % delta_costs)
     min_delta_index = np.argmin(delta_costs)
     min_delta = self.deltas[min_delta_index]
     drive_msg.header.stamp = rospy.Time.now()
@@ -183,8 +184,8 @@ def kinematic_model_step(pose, control, car_length):
   # Apply the kinematic model
   # Make sure your resulting theta is between 0 and 2*pi
   # Consider the case where delta == 0.0
-  
-  #Calculating Beta 
+
+  #Calculating Beta
 
   # if(np.isfinite(tan(control[1])) ) == False):
   #   control[1]+= 0.1
@@ -192,32 +193,32 @@ def kinematic_model_step(pose, control, car_length):
   B = math.atan(  0.5*math.tan(control[1]) )
   theta_next = pose[2] + (control[0]/car_length)*(math.sin(2*B))*control[2]
 
-  
+
   if(theta_next<0):
     theta_next = math.pi + theta_next
 
   elif(theta_next > math.pi ):
     theta_next = theta_next - math.pi
 
- # If delta = 0.0, the car is aligned in the required direction, so angle should remain same. 
- # delta=0 > tanB = 0 > sinB =0 > theta next = theta 
+ # If delta = 0.0, the car is aligned in the required direction, so angle should remain same.
+ # delta=0 > tanB = 0 > sinB =0 > theta next = theta
  # x(dot) = x_next - x_prev => x_next = x_prev + speed*cos(theta_next), similarly for y
   if(B==0):
-    x_next = pose[0] + math.cos(theta_next) 
-    y_next = pose[1] + math.sin(theta_next) 
-    
+    x_next = pose[0] + math.cos(theta_next)
+    y_next = pose[1] + math.sin(theta_next)
+
   else:
     x_next = pose[0] + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(control[2]))
     y_next = pose[1] - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(control[2]))
 
 
   resulting_pose = [x_next, y_next, theta_next]
-
+  rospy.loginfo('%s',resulting_pose)
   return resulting_pose
 
   # YOUR CODE HERE
   # pass
-    
+
 '''
 Repeatedly apply the kinematic model to produce a trajectory for the car
   init_pose: The initial pose of the robot [x,y,theta]
@@ -236,8 +237,9 @@ def generate_rollout(init_pose, controls, car_length):
     rollout_list.append(pose)
 
   rollout = np.asarray(rollout_list)
+  #rospy.loginfo('%s' % rollout)
   return rollout
-  
+
 
 
 '''
