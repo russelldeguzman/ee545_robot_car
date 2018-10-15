@@ -40,13 +40,16 @@ class LaserWanderer:
     compute_time: The amount of time (in seconds) we can spend computing the cost
     laser_offset: How much to shorten the laser measurements
   '''
-  def __init__(self, rollouts, deltas, speed, compute_time, laser_offset):
+  def __init__(self, rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr):
     # Store the params for later
     self.rollouts = rollouts
     self.deltas = deltas
     self.speed = speed
     self.compute_time = compute_time
     self.laser_offset = laser_offset
+    self.laser_window = laser_window
+    self.delta_incr = delta_incr
+    self.prev_angle = None
 
     # YOUR CODE HERE
     self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 1)
@@ -60,7 +63,7 @@ class LaserWanderer:
   Only display the last pose of each rollout to prevent lagginess
     msg: A PoseStamped representing the current pose of the car
   '''
-    
+
   def vizsub_cb(self, msg):
     # Create the PoseArray to publish. Will contain N poses, where the n-th pose
     # represents the last pose in the n-th trajectory
@@ -78,7 +81,7 @@ class LaserWanderer:
         pose.position.y = self.rollouts[n][-1][1] + self.current_pose[1]
         pose.position.z = 0
         pa.poses.append(pose)
-        
+
     self.viz_pub.publish(pa)
 
   """
@@ -124,12 +127,24 @@ class LaserWanderer:
     if rollout_pose_angle < laser_msg.angle_min or rollout_pose_angle > laser_msg.angle_max:
         cost += MAX_PENALTY
         return cost
-    angle_index = (int) ((rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment)
-    laser_ray_dist = laser_msg.ranges[angle_index]
-    #rospy.loginfo("dist: %s (wanted_pose: %s)| laser_ray_dist: %s" % (rollout_pose_distance,rollout_pose,laser_ray_dist ))
-    if np.isfinite(laser_ray_dist) and rollout_pose_distance > (laser_ray_dist - np.abs(self.laser_offset)):
-        cost += MAX_PENALTY
-        return cost
+
+    for i in range(0, self.laser_window):
+        angle_index = (int) ((rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment)
+        if (angle_index + i) < len(laser_msg.ranges):
+            angle_index += i
+            laser_ray_dist = laser_msg.ranges[angle_index]
+
+            # we want to ignore NaN and 0 values (as per Patrick's note)
+            # these are non-converged sensor values which will result in udefnined(bad) behavior
+            if np.isfinite(laser_ray_dist) and laser_ray_dist > 0 and rollout_pose_distance > (laser_ray_dist - np.abs(self.laser_offset)):
+                cost += MAX_PENALTY
+                return cost
+
+    if self.prev_angle != None :
+        prev_angle = self.prev_angle
+        if np.abs( prev_angle - delta ) > ( 2 * self.delta_incr ):
+            cost += MAX_PENALTY
+
     return cost
 
   '''
@@ -167,6 +182,7 @@ class LaserWanderer:
     #rospy.loginfo("%s" % delta_costs)
     min_delta_index = np.argmin(delta_costs)
     min_delta = self.deltas[min_delta_index]
+    self.prev_angle = min_delta #keep track of the angle we chose
     drive_msg.header.stamp = rospy.Time.now()
     drive_msg.header.frame_id = '/map'
     drive_msg.drive.steering_angle = min_delta
@@ -288,12 +304,17 @@ def main():
   # 'Starting' values are ones you should consider tuning for your system
   # YOUR CODE HERE
   speed = rospy.get_param('~speed')# Default val: 1.0
+  speed = speed / 2.0
   min_delta = rospy.get_param('~min_delta')# Default val: -0.34
   max_delta = rospy.get_param('~max_delta')# Default val: 0.341
   delta_incr = rospy.get_param('~delta_incr')# Starting val: 0.34/3 (consider changing the denominator)
-  delta_incr = delta_incr / 3.0
+  laser_window = rospy.get_param('~laser_window')# to account for car width we search a window
+  #in the laser scan for possible collision objects Default val = 1
+  laser_window += 15
+  delta_incr = delta_incr / 4.0
   dt = rospy.get_param('~dt')# Default val: 0.01
   T = rospy.get_param('~T')# Starting val: 300
+  T = 450
   compute_time = rospy.get_param('~compute_time') # Default val: 0.09
   laser_offset = rospy.get_param('~laser_offset')# Starting val: 1.0
 
@@ -305,7 +326,7 @@ def main():
                                            delta_incr, dt, T, car_length)
 
   # Create the LaserWanderer
-  lw = LaserWanderer(rollouts, deltas, speed, compute_time, laser_offset)
+  lw = LaserWanderer(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr)
 
   # Keep the node alive
   rospy.spin()
