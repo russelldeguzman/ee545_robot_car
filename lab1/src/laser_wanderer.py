@@ -179,7 +179,14 @@ class LaserWanderer:
 
     # Find the delta that has the smallest cost and execute it by publishing
     # YOUR CODE HERE
-    #rospy.loginfo("%s" % delta_costs)
+
+    #if there is no good path, pick the last direction and then turn
+    # if ( min(delta_costs) >= MAX_PENALTY ):
+    #     if( self.prev_angle > 0):
+    #         min_delta_index = len(self.deltas) - 1
+    #     else:
+    #         min_delta_index = 0
+    # else:
     min_delta_index = np.argmin(delta_costs)
     min_delta = self.deltas[min_delta_index]
     self.prev_angle = min_delta #keep track of the angle we chose
@@ -231,7 +238,6 @@ def kinematic_model_step(pose, control, car_length):
 
 
   resulting_pose = [x_next, y_next, theta_next]
-  rospy.loginfo('%s',resulting_pose)
   return resulting_pose
 
   # YOUR CODE HERE
@@ -310,11 +316,9 @@ def main():
   delta_incr = rospy.get_param('~delta_incr')# Starting val: 0.34/3 (consider changing the denominator)
   laser_window = rospy.get_param('~laser_window')# to account for car width we search a window
   #in the laser scan for possible collision objects Default val = 1
-  laser_window += 15
   delta_incr = delta_incr / 4.0
   dt = rospy.get_param('~dt')# Default val: 0.01
   T = rospy.get_param('~T')# Starting val: 300
-  T = 450
   compute_time = rospy.get_param('~compute_time') # Default val: 0.09
   laser_offset = rospy.get_param('~laser_offset')# Starting val: 1.0
 
