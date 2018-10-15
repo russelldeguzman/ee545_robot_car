@@ -124,9 +124,9 @@ class LaserWanderer:
     rollout_pose_distance = np.linalg.norm(np.array(current_pose[:-1]) - np.array(rollout_pose[:-1]))
 
     # if the laser can't see this position, assign max penalty, (e.g. assume that there's something there)
-    if rollout_pose_angle < laser_msg.angle_min or rollout_pose_angle > laser_msg.angle_max:
-        cost += MAX_PENALTY
-        return cost
+    # if rollout_pose_angle < laser_msg.angle_min or rollout_pose_angle > laser_msg.angle_max:
+    #     cost += MAX_PENALTY
+    #     return cost
 
     for i in range(0, self.laser_window):
         angle_index = (int) ((rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment)
@@ -310,13 +310,13 @@ def main():
   # 'Starting' values are ones you should consider tuning for your system
   # YOUR CODE HERE
   speed = rospy.get_param('~speed')# Default val: 1.0
-  speed = speed / 2.0
+  speed = speed
   min_delta = rospy.get_param('~min_delta')# Default val: -0.34
   max_delta = rospy.get_param('~max_delta')# Default val: 0.341
   delta_incr = rospy.get_param('~delta_incr')# Starting val: 0.34/3 (consider changing the denominator)
   laser_window = rospy.get_param('~laser_window')# to account for car width we search a window
   #in the laser scan for possible collision objects Default val = 1
-  delta_incr = delta_incr / 4.0
+  delta_incr = delta_incr / 3
   dt = rospy.get_param('~dt')# Default val: 0.01
   T = rospy.get_param('~T')# Starting val: 300
   compute_time = rospy.get_param('~compute_time') # Default val: 0.09
