@@ -50,6 +50,7 @@ class LaserWanderer:
     self.laser_window = laser_window
     self.delta_incr = delta_incr
     self.prev_angle = None
+    self.laser_distances = np.copy(self.deltas)
 
     # YOUR CODE HERE
     self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 1)
@@ -102,7 +103,7 @@ class LaserWanderer:
     rollout_pose: The pose in the trajectory
     laser_msg: The most recent laser scan
   '''
-  def compute_cost(self, delta, rollout_pose, laser_msg):
+  def compute_cost(self, delta, rollout_pose, laser_msg, delta_index):
 
     # Initialize the cost to be the magnitude of delta
     # Consider the line that goes from the robot to the rollout pose
@@ -118,6 +119,7 @@ class LaserWanderer:
     # NOTE THAT NO COORDINATE TRANSFORMS ARE NECESSARY INSIDE OF THIS FUNCTION
     #rospy.loginfo('%s' % rollout_pose)
     # YOUR CODE HERE
+
     cost = np.absolute(delta)
     current_pose = [0,0,0]
     rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
@@ -133,9 +135,11 @@ class LaserWanderer:
         if (angle_index + i) < len(laser_msg.ranges):
             angle_index += i
             laser_ray_dist = laser_msg.ranges[angle_index]
+            self.laser_distances[delta_index] = laser_ray_dist
 
             # we want to ignore NaN and 0 values (as per Patrick's note)
             # these are non-converged sensor values which will result in udefnined(bad) behavior
+            rospy.loginfo(laser_ray_dist)
             if np.isfinite(laser_ray_dist) and laser_ray_dist > 0 and rollout_pose_distance > (laser_ray_dist - np.abs(self.laser_offset)):
                 cost += MAX_PENALTY
                 return cost
@@ -174,15 +178,15 @@ class LaserWanderer:
     T = self.rollouts.shape[1]
     while (rospy.Time.now().to_sec() - start < self.compute_time and traj_depth < T):
         for n in range(self.rollouts.shape[0]):
-            delta_costs[n] += self.compute_cost(self.deltas[n], self.rollouts[n][traj_depth],msg)
+            delta_costs[n] += self.compute_cost(self.deltas[n], self.rollouts[n][traj_depth],msg, n)
         traj_depth += 1
 
     # Find the delta that has the smallest cost and execute it by publishing
     # YOUR CODE HERE
 
     #if there is no good path, pick the last direction and then turn
-    # if ( min(delta_costs) >= MAX_PENALTY ):
-    #     if( self.prev_angle > 0):
+    # if ( np.sum(self.laser_distances) >= 0.15 * len(self.laser_distances)):
+    #     if( np.sum(delta_costs[:len(delta_costs)/2]) > np.sum(delta_costs[len(delta_costs)/2:-1]) ):
     #         min_delta_index = len(self.deltas) - 1
     #     else:
     #         min_delta_index = 0
@@ -195,6 +199,8 @@ class LaserWanderer:
     drive_msg.drive.steering_angle = min_delta
     drive_msg.drive.speed = self.speed
     self.cmd_pub.publish(drive_msg)
+    rospy.loginfo(delta_costs)
+    rospy.loginfo(self.laser_distances)
 
 ###CLASS DEFINITION ENDS
 
