@@ -52,7 +52,7 @@ class LaserWanderer:
     self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 10)
     self.laser_sub = rospy.Subscriber(SCAN_TOPIC, LaserScan, self.wander_cb)
     self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 10) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
-    self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.viz_sub)# Create a subscriber to the current position of the car
+    self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.viz_sub) # Create a subscriber to the current position of the car
     # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
 
   '''
@@ -182,20 +182,22 @@ def kinematic_model_step(pose, control, car_length):
   
   #if delta = 0.0, the car is aligned in the required direction, so angle should remain same. delta=0 > tanB = 0 > sinB =0 > theta next = theta
   #Calculating Beta 
-  B = math.atan(  0.5*math.tan(delta) )
+  if(np.isfinite(control[1]) == False):
+    control[1]+= 0.1
 
-  theta_next = theta + v/car_length*(math.sin(2*B))*dt
+  B = math.atan(  0.5*math.tan(control[1]) )
+
+  theta_next = pose[2] + control[0]/car_length*(math.sin(2*B))*control[2]
 
   if(theta_next<0):
     theta_next = math.pi + theta_next
 
-  else if(theta_next > math.pi ):
+  elif(theta_next > math.pi ):
     theta_next = theta_next - math.pi
 
-
-  x_next = pose.x + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(theta))
+  x_next = pose.x + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(control[2]))
   
-  y_next = pose.y - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(theta))
+  y_next = pose.y - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(control[2]))
 
 
   resulting_pose = [x_next, y_next, theta_next]
@@ -223,6 +225,7 @@ def generate_rollout(init_pose, controls, car_length):
     rollout_list.append(pose)
 
   rollout = np.asarray(rollout_list)
+  return rollout
   
 
 
