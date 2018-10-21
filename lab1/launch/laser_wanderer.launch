@@ -1,12 +1,12 @@
 <launch>
-		<!-- Launch a BagFollower node and pass any necessary parameters -->
-    <node pkg="lab0" type="laser_wanderer.py" name="laser_wanderer" >
-      <param name = 'speed' type = 'float' value='1.0'/>
-      <param name = 'min_delta' type = 'float' value='-0.34'/>
-      <param name = 'max_delta' type = 'float' value='0.341'/>
-      <param name = 'delta_incr' type = 'float' value='0.34/3'/>
-      <param name = 'T' type = 'float' value='300'/>
-      <param name = 'compute_time' type = 'float' value='0.09'/>
-      <param name = 'laser_offset' type = 'float' value='1.0'/>
+	  <node name="laser_wanderer" type="laser_wanderer.py" pkg="lab1"  output="screen">
+      <param name = "speed" type = "double" value="1.0"/>
+      <param name = 'min_delta' type = 'double' value='-0.34'/>
+      <param name = 'max_delta' type = 'double' value='0.341'/>
+      <param name = 'delta_incr' type = 'double' value='0.34'/>
+      <param name = 'T' type = 'int' value='300'/>
+      <param name = 'dt' type = 'double' value='0.01'/>
+      <param name = 'compute_time' type = 'double' value='0.09'/>
+      <param name = 'laser_offset' type = 'double' value='1.0'/>
     </node>
 </launch>

@@ -117,10 +117,12 @@ class LaserWanderer:
     current_pose = self.rollouts[0][0]
     rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
     rollout_pose_distance = np.linalg.norm(np.array(current_pose[:-1]) - np.array(rollout_pose[:-1]))
+
     # if the laser can't see this position, assign max penalty, (e.g. assume that there's something there)
     if rollout_pose_angle < laser_msg.angle_min or rollout_pose_angle > laser_msg.angle_max:
         cost += MAX_PENALTY
         return cost
+        
     angle_index = (int) ((rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment)
     laser_ray_dist = laser_msg.ranges[angle_index]
     if np.isfinite(laser_ray_dist) and rollout_pose_distance > (laser_ray_dist - np.abs(self.laser_offset)):
@@ -166,7 +168,9 @@ class LaserWanderer:
     drive_msg.header.frame_id = '/map'
     drive_msg.drive.steering_angle = min_delta
     drive_msg.drive.speed = self.speed
-    self.cmd_pub.Publish(drive_msg)
+    self.cmd_pub.publish(drive_msg)
+
+###CLASS DEFINITION ENDS
 
 '''
 Apply the kinematic model to the passed pose and control
@@ -180,24 +184,31 @@ def kinematic_model_step(pose, control, car_length):
   # Make sure your resulting theta is between 0 and 2*pi
   # Consider the case where delta == 0.0
   
-  #if delta = 0.0, the car is aligned in the required direction, so angle should remain same. delta=0 > tanB = 0 > sinB =0 > theta next = theta
   #Calculating Beta 
-  if(np.isfinite(control[1]) == False):
-    control[1]+= 0.1
+
+  # if(np.isfinite(tan(control[1])) ) == False):
+  #   control[1]+= 0.1
 
   B = math.atan(  0.5*math.tan(control[1]) )
+  theta_next = pose[2] + (control[0]/car_length)*(math.sin(2*B))*control[2]
 
-  theta_next = pose[2] + control[0]/car_length*(math.sin(2*B))*control[2]
-
+  
   if(theta_next<0):
     theta_next = math.pi + theta_next
 
   elif(theta_next > math.pi ):
     theta_next = theta_next - math.pi
 
-  x_next = pose.x + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(control[2]))
-  
-  y_next = pose.y - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(control[2]))
+ # If delta = 0.0, the car is aligned in the required direction, so angle should remain same. 
+ # delta=0 > tanB = 0 > sinB =0 > theta next = theta 
+ # x(dot) = x_next - x_prev => x_next = x_prev + speed*cos(theta_next), similarly for y
+  if(B==0):
+    x_next = pose[0] + math.cos(theta_next) 
+    y_next = pose[1] + math.sin(theta_next) 
+    
+  else:
+    x_next = pose[0] + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(control[2]))
+    y_next = pose[1] - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(control[2]))
 
 
   resulting_pose = [x_next, y_next, theta_next]
@@ -276,6 +287,7 @@ def main():
   min_delta = rospy.get_param('~min_delta')# Default val: -0.34
   max_delta = rospy.get_param('~max_delta')# Default val: 0.341
   delta_incr = rospy.get_param('~delta_incr')# Starting val: 0.34/3 (consider changing the denominator)
+  delta_incr = delta_incr / 3.0
   dt = rospy.get_param('~dt')# Default val: 0.01
   T = rospy.get_param('~T')# Starting val: 300
   compute_time = rospy.get_param('~compute_time') # Default val: 0.09
