@@ -179,10 +179,32 @@ def kinematic_model_step(pose, control, car_length):
   # Apply the kinematic model
   # Make sure your resulting theta is between 0 and 2*pi
   # Consider the case where delta == 0.0
+  
+  #if delta = 0.0, the car is aligned in the required direction, so angle should remain same. delta=0 > tanB = 0 > sinB =0 > theta next = theta
+  #Calculating Beta 
+  B = math.atan(  0.5*math.tan(delta) )
+
+  theta_next = theta + v/car_length*(math.sin(2*B))*dt
+
+  if(theta_next<0):
+    theta_next = math.pi + theta_next
+
+  else if(theta_next > math.pi ):
+    theta_next = theta_next - math.pi
+
+
+  x_next = pose.x + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(theta))
+  
+  y_next = pose.y - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(theta))
+
+
+  resulting_pose = [x_next, y_next, theta_next]
+
+  return resulting_pose
 
   # YOUR CODE HERE
-  pass
-
+  # pass
+    
 '''
 Repeatedly apply the kinematic model to produce a trajectory for the car
   init_pose: The initial pose of the robot [x,y,theta]
@@ -192,7 +214,17 @@ Returns a Tx3 matrix where the t-th row corresponds to the robot's pose at time 
 '''
 def generate_rollout(init_pose, controls, car_length):
   # YOUR CODE HERE
-  pass
+  # pass
+  N = controls.shape[0]
+  rollout_list = []
+  pose = init_pose
+  for i in xrange(N):
+    pose = kinematic_model_step(pose, controls[i], car_length)
+    rollout_list.append(pose)
+
+  rollout = np.asarray(rollout_list)
+  
+
 
 '''
 Helper function to generate a number of kinematic car rollouts
