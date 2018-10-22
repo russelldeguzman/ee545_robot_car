@@ -49,10 +49,10 @@ class LaserWanderer:
     self.laser_offset = laser_offset
 
     # YOUR CODE HERE
-    self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 10)
+    self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 1)
     self.laser_sub = rospy.Subscriber(SCAN_TOPIC, LaserScan, self.wander_cb)
-    self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 10) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
-    self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.viz_sub) # Create a subscriber to the current position of the car
+    self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 1) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
+    self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.vizsub_cb) # Create a subscriber to the current position of the car
     # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
 
   '''
@@ -60,7 +60,8 @@ class LaserWanderer:
   Only display the last pose of each rollout to prevent lagginess
     msg: A PoseStamped representing the current pose of the car
   '''
-  def viz_sub(self, msg):
+    
+  def vizsub_cb(self, msg):
     # Create the PoseArray to publish. Will contain N poses, where the n-th pose
     # represents the last pose in the n-th trajectory
     pa = PoseArray()
@@ -73,10 +74,11 @@ class LaserWanderer:
     for n in range(self.rollouts.shape[0]):
         pose = Pose()
         pose.orientation = utils.angle_to_quaternion(self.rollouts[n][-1][2])
-        pose.position.x = self.rollouts[n][-1][0]
-        pose.position.y = self.rollouts[n][-1][1]
+        pose.position.x = self.rollouts[n][-1][0] + self.current_pose[0]
+        pose.position.y = self.rollouts[n][-1][1] + self.current_pose[1]
         pose.position.z = 0
         pa.poses.append(pose)
+        
     self.viz_pub.publish(pa)
 
   """
@@ -204,12 +206,12 @@ def kinematic_model_step(pose, control, car_length):
  # delta=0 > tanB = 0 > sinB =0 > theta next = theta
  # x(dot) = x_next - x_prev => x_next = x_prev + speed*cos(theta_next), similarly for y
   if(B==0):
-    x_next = pose[0] + math.cos(theta_next)
-    y_next = pose[1] + math.sin(theta_next)
+    x_next = pose[0] + control[0]*math.cos(theta_next)*control[2]
+    y_next = pose[1] + control[0]*math.sin(theta_next)*control[2]
 
   else:
-    x_next = pose[0] + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(control[2]))
-    y_next = pose[1] - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(control[2]))
+    x_next = pose[0] + car_length/math.sin(2*B) * (math.sin(theta_next) - math.sin(pose[2]))
+    y_next = pose[1] - car_length/math.sin(2*B) * (math.cos(theta_next) - math.cos(pose[2]))
 
 
   resulting_pose = [x_next, y_next, theta_next]
