@@ -197,9 +197,9 @@ def kinematic_model_step(pose, control, car_length):
 
 
   if(theta_next<0):
-    theta_next = math.pi + theta_next
+    theta_next = 2*math.pi + theta_next
 
-  elif(theta_next > math.pi ):
+  elif(theta_next > 2*math.pi ):
     theta_next = theta_next - math.pi
 
  # If delta = 0.0, the car is aligned in the required direction, so angle should remain same.
