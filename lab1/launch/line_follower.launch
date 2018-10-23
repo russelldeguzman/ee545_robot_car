@@ -7,7 +7,7 @@
       <param name="rotation_weight" type="double" value="1.0"/>
       <param name="kp" type="double" value="1"/>
       <param name="ki" type="double" value="0.0"/>
-      <param name="kd" type="double" value="0.0"/>
+      <param name="kd" type="double" value=".2"/>
       <param name="error_buff_length" type="double" value="10"/>
       <param name="speed" type="double" value="1.0"/>   
    </node>

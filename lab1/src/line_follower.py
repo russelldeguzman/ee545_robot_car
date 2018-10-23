@@ -152,6 +152,11 @@ class LineFollower:
     translation_error = np.cross(distance_vector, goal_unit_vector)
     rotation_error= goal_idx_th - cur_pose_th 
 
+    # rospy.loginfo("translation error ")
+    # rospy.loginfo(translation_error)
+    # rospy.loginfo("rotation error")
+    # rospy.loginfo(rotation_error)
+
     # Compute the total error
     # Translation error was computed above
     # Rotation error is the difference in yaw between the robot and goal configuration
@@ -173,28 +178,28 @@ class LineFollower:
     # Compute the derivative error using the passed error, the current time,
     # the most recent error stored in self.error_buff, and the most recent time
     # stored in self.error_buff
-    
-    # get right most element in a 
+    deriv_error=0
     if len(self.error_buff) > 0:
 
       [last_time, last_error] = self.error_buff[-1]
       deriv_error = (error - last_error) / (now - last_time)
 
-    # Add the current error to the buffer
-    self.error_buff.append((error, now))
-    
     # Compute the integral error by applying rectangular integration to the elements
-    # of self.error_buff: https://chemicalstatistician.wordpress.com/2014/01/20/rectangular-integration-a-k-a-the-midpoint-rule/
-
     integ_error = 0
+    next_time = now 
+    next_error= error
+    for elem in reversed(self.error_buff): 
+
+      error_element = (elem[1]+next_error)/2 * (next_time - elem[0])
+      integ_error = integ_error + error_element
+
+      #Store the next time 
+      next_time = elem[0]
+
+    # Add the current error to the buffer
+    self.error_buff.append((now,error))
 
     # Compute the steering angle as the sum of the pid errors
-
-    # rospy.loginfo("ERrors")
-    # rospy.loginfo(error)
-    # rospy.loginfo(deriv_error)
-    # rospy.loginfo(integ_error)
-
     return self.kp*error + self.ki*integ_error + self.kd * deriv_error
     
   '''
@@ -209,6 +214,8 @@ class LineFollower:
 
     success, error = self.compute_error(cur_pose)
 
+    # rospy.loginfo("error")
+    # rospy.loginfo(error)
    
     if not success:
       # We have reached our goal
@@ -217,9 +224,9 @@ class LineFollower:
       
     delta = self.compute_steering_angle(error)
 
-    rospy.loginfo("Steer Angle")
+    # rospy.loginfo("Steer Angle")
     
-    rospy.loginfo(delta)
+    # rospy.loginfo(delta)
 
     # Setup the control message
     ads = AckermannDriveStamped()
