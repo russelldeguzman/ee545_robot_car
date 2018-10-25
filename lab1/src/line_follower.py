@@ -79,32 +79,27 @@ class LineFollower:
         #   the configuration is in front or behind the robot
         # If the configuration is in front of the robot, break out of the loop
 
-    # Check if the plan is empty. If so, return (False, 0.0)
-
-    if len(self.plan)==0: 
-
-      return (False, 0.0)
-
     #Current position of car     
     cur_pose_x = cur_pose[0]
     cur_pose_y = cur_pose[1]
     cur_pose_th = cur_pose[2]
 
+    
+    #Initialize i, incrementer
     i = 0 
-
     while len(self.plan) > 0:
-      # YOUR CODE HERE. 
       # This code starts at the beginning of self.plan and marches forward until 
       # it encounters a pose that is in front of the car 
       # To do this, simply we will make use of the dot product instead of coordinate transformations.
       # First calculate vector between carPose and planPose, vectorC2P
       # If dot product between carPose unit vector and vectorC2P is positive, then the point is in front 
       # If dot product between carPose unit vector and vectorC2P is negative, then the point is behind 
-
-      target_x = self.plan[i,0]
-      target_y = self.plan[i,1]
-      target_th = self.plan[i,2]
-      i = i+1 
+      if len(self.plan)==1:
+        [target_x, target_y, target_th]= self.plan[0]
+      else:
+        target_x = self.plan[i,0]
+        target_y = self.plan[i,1]
+        target_th = self.plan[i,2]
 
       # Vector between ith pose and the current car pse
       vectorC2P = [target_x - cur_pose_x, target_y - cur_pose_y]
@@ -117,17 +112,27 @@ class LineFollower:
 
       # If dot product is positive value, then the target node is in front 
       # Break out of the while loop if dot product if target node is in front
-      if dotProduct > 0: 
+
+      rospy.loginfo(dotProduct)
+      if dotProduct > -0.2: 
         break 
     
       #Remove the first pose in self.plan 
       self.plan = self.plan[1:]
 
-      # # Prints the length of the plan. 
-        # rospy.loginfo("self.plan length")
-        # rospy.loginfo(len(self.plan))
+      
+      # Prints the length of the plan. 
+      # rospy.loginfo("self.plan length")
+      # rospy.loginfo(len(self.plan))
 
+      # Increment i 
+      i = i+1 
     
+    # Check if the plan is empty. If so, return (False, 0.0)
+    if len(self.plan)==0: 
+
+      return (False, 0.0)
+
     # At this point, we have removed configurations from the plan that are behind
     # the robot. Therefore, element 0 is the first configuration in the plan that is in 
     # front of the robot. To allow the robot to have some amount of 'look ahead',
@@ -136,7 +141,7 @@ class LineFollower:
     goal_idx = min(0+self.plan_lookahead, len(self.plan)-1)
    
     # Compute the translation error between the robot and the configuration at goal_idx in the plan
-    # YOUR CODE HERE
+    rospy.loginfo(len(self.plan))
 
     goal_idx_x = self.plan[goal_idx,0]
     goal_idx_y = self.plan[goal_idx,1]
@@ -198,6 +203,7 @@ class LineFollower:
 
     # Add the current error to the buffer
     self.error_buff.append((now,error))
+
 
     # Compute the steering angle as the sum of the pid errors
     return self.kp*error + self.ki*integ_error + self.kd * deriv_error
