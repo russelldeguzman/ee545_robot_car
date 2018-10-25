@@ -204,6 +204,7 @@ class LineFollower:
     # Add the current error to the buffer
     self.error_buff.append((now,error))
 
+
     # Compute the steering angle as the sum of the pid errors
     return self.kp*error + self.ki*integ_error + self.kd * deriv_error
     
