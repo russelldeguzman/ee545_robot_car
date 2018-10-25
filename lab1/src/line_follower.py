@@ -147,7 +147,7 @@ class LineFollower:
     goal_idx_y = self.plan[goal_idx,1]
     goal_idx_th = self.plan[goal_idx,2]
 
-    # Unit vector in the direction of the goal pose
+    # Unit vector in the same orientation as the goal pose
     goal_unit_vector = [np.cos(goal_idx_th), np.sin(goal_idx_th)]
 
     # Vector between the current pose and the goal pose 
@@ -155,7 +155,7 @@ class LineFollower:
     
     # Use the cross product to calculate the distance error to capture positive or negative wrt to goal_unit_vector
     translation_error = np.cross(distance_vector, goal_unit_vector)
-    rotation_error= goal_idx_th - cur_pose_th 
+    rotation_error= ((goal_idx_th - cur_pose_th + np.pi) % (2*np.pi)) - np.pi  # Needed in order to constrain this difference to the interval [-pi, pi] as opposed to [-2*pi, 2*pi] 
 
     # rospy.loginfo("translation error ")
     # rospy.loginfo(translation_error)
