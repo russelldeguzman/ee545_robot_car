@@ -7,12 +7,13 @@ import rospy
 import numpy as np
 from geometry_msgs.msg import PoseArray, PoseStamped
 from ackermann_msgs.msg import AckermannDriveStamped
+from collections import deque
 
 import utils
 
 # The topic to publish control commands to
 PUB_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' 
-SUB_TOPIC = '/sim_car_pose/pose' # The topic that provides the simulated car pose
+# SUB_TOPIC = '/sim_car_pose/pose' # The topic that provides the simulated car pose
 MAP_TOPIC = 'static_map' # The service topic that will provide the map
 
 '''
@@ -53,14 +54,14 @@ class LineFollower:
     # times at which they were received. That is, each element is of the form
     # [time_stamp (seconds), error]. For more info about the data struct itself, visit
     # https://docs.python.org/2/library/collections.html#collections.deque
-    self.error_buff = collections.deque(maxlen=error_buff_length)
+    self.error_buff = deque(maxlen=error_buff_length)
     self.speed = speed
     
     # Publisher 
     self.cmd_pub = rospy.Publisher(PUB_TOPIC, AckermannDriveStamped, queue_size =10)
 
     # Create a subscriber to pose_topic, with callback 'self.pose_cb'
-    self.pose_sub = rospy.Subscriber(SUB_TOPIC, PoseStamped, self.pose_cb, queue_size = 1)
+    self.pose_sub = rospy.Subscriber(pose_topic, PoseStamped, self.pose_cb, queue_size = 1)
 
   
   '''
@@ -83,69 +84,50 @@ class LineFollower:
     cur_pose_x = cur_pose[0]
     cur_pose_y = cur_pose[1]
     cur_pose_th = cur_pose[2]
-
     
-    #Initialize i, incrementer
-    i = 0 
-    while len(self.plan) > 0:
       # This code starts at the beginning of self.plan and marches forward until 
       # it encounters a pose that is in front of the car 
       # To do this, simply we will make use of the dot product instead of coordinate transformations.
       # First calculate vector between carPose and planPose, vectorC2P
       # If dot product between carPose unit vector and vectorC2P is positive, then the point is in front 
       # If dot product between carPose unit vector and vectorC2P is negative, then the point is behind 
-      if len(self.plan)==1:
-        [target_x, target_y, target_th]= self.plan[0]
-      else:
-        target_x = self.plan[i,0]
-        target_y = self.plan[i,1]
-        target_th = self.plan[i,2]
+    while True:
+      try:
+        [target_x, target_y, target_th] = self.plan.popleft()
 
-      # Vector between ith pose and the current car pse
-      vectorC2P = [target_x - cur_pose_x, target_y - cur_pose_y]
+        # Vector between ith pose and the current car pse
+        vectorC2P = [target_x - cur_pose_x, target_y - cur_pose_y]
+        unit_vectorC2P = vectorC2P / np.linalg.norm(vectorC2P)
 
-      # Unit vector in the direction of the car pose 
-      carPoseVector = [np.cos(cur_pose_th), np.sin(cur_pose_th)]
+        # Unit vector in the direction of the car pose 
+        carPoseVector = [np.cos(cur_pose_th), np.sin(cur_pose_th)]
 
-      dotProduct = np.dot(vectorC2P, carPoseVector)
+        dotProduct = np.dot(vectorC2P, carPoseVector)
 
-
-      # If dot product is positive value, then the target node is in front 
-      # Break out of the while loop if dot product if target node is in front
-
-      rospy.loginfo(dotProduct)
-      if dotProduct > -0.2: 
-        break 
-    
-      #Remove the first pose in self.plan 
-      self.plan = self.plan[1:]
-
-      
-      # Prints the length of the plan. 
-      # rospy.loginfo("self.plan length")
-      # rospy.loginfo(len(self.plan))
-
-      # Increment i 
-      i = i+1 
-    
-    # Check if the plan is empty. If so, return (False, 0.0)
-    if len(self.plan)==0: 
-
-      return (False, 0.0)
+        # If dot product is positive value, then the target node is in front 
+        # Break out of the while loop if dot product > -0.2 (i.e. target node is in front)
+        if dotProduct > -0.2:   # Counting a point as "in front" when the dot product is slightly negative helps make sure the robot doesn't stop slightly short of the last pose in the array
+          self.plan.appendleft(np.array([target_x, target_y, target_th])) # If it turns out the point was in front, put it back in the deque in case it's still in front at the next timestep
+          rospy.loginfo("Quiting While Loop - Point forward of car reached")
+          # Prints the length of the plan. 
+          rospy.loginfo("self.plan length")
+          rospy.loginfo(len(self.plan))
+          break
+      except IndexError:
+        # self.plan is empty, so return (False, 0.0)
+        rospy.loginfo("THIS SHOULD BE THE END OF MSGs")
+        return (False, 0.0)
 
     # At this point, we have removed configurations from the plan that are behind
     # the robot. Therefore, element 0 is the first configuration in the plan that is in 
     # front of the robot. To allow the robot to have some amount of 'look ahead',
     # we choose to have the robot head towards the configuration at index 0 + self.plan_lookahead
     # We call this index the goal_index
-    goal_idx = min(0+self.plan_lookahead, len(self.plan)-1)
-   
-    # Compute the translation error between the robot and the configuration at goal_idx in the plan
-    rospy.loginfo(len(self.plan))
 
-    goal_idx_x = self.plan[goal_idx,0]
-    goal_idx_y = self.plan[goal_idx,1]
-    goal_idx_th = self.plan[goal_idx,2]
+    goal_idx = int(round(min(0+self.plan_lookahead, len(self.plan)-1)))
+    [goal_idx_x, goal_idx_y, goal_idx_th] = self.plan[goal_idx]
+
+    ### Compute the translation error between the robot and the configuration at goal_idx in the plan
 
     # Unit vector in the same orientation as the goal pose
     goal_unit_vector = [np.cos(goal_idx_th), np.sin(goal_idx_th)]
@@ -157,10 +139,14 @@ class LineFollower:
     translation_error = np.cross(distance_vector, goal_unit_vector)
     rotation_error= ((goal_idx_th - cur_pose_th + np.pi) % (2*np.pi)) - np.pi  # Needed in order to constrain this difference to the interval [-pi, pi] as opposed to [-2*pi, 2*pi] 
 
-    # rospy.loginfo("translation error ")
-    # rospy.loginfo(translation_error)
-    # rospy.loginfo("rotation error")
-    # rospy.loginfo(rotation_error)
+    rospy.loginfo("goal_th = ")
+    rospy.loginfo(goal_idx_th)
+    rospy.loginfo("pose_th = ")
+    rospy.loginfo(cur_pose_th)
+    rospy.loginfo("translation error ")
+    rospy.loginfo(translation_error)
+    rospy.loginfo("rotation error")
+    rospy.loginfo(rotation_error)
 
     # Compute the total error
     # Translation error was computed above
@@ -169,7 +155,7 @@ class LineFollower:
 
     error = self.translation_weight * translation_error + self.rotation_weight * rotation_error
 
-    return True, error
+    return (True, error)
     
     
   '''
@@ -183,7 +169,7 @@ class LineFollower:
     # Compute the derivative error using the passed error, the current time,
     # the most recent error stored in self.error_buff, and the most recent time
     # stored in self.error_buff
-    deriv_error=0
+    deriv_error = 0
     if len(self.error_buff) > 0:
 
       [last_time, last_error] = self.error_buff[-1]
@@ -206,7 +192,11 @@ class LineFollower:
 
 
     # Compute the steering angle as the sum of the pid errors
-    return self.kp*error + self.ki*integ_error + self.kd * deriv_error
+    steering_angle = self.kp*error + self.ki*integ_error + self.kd * deriv_error
+    rospy.loginfo("Steering Angle") 
+    rospy.loginfo(steering_angle)
+    steering_angle = np.sign(steering_angle)*min(abs(steering_angle), np.pi/2)
+    return steering_angle
     
   '''
   Callback for the current pose of the car
@@ -220,19 +210,21 @@ class LineFollower:
 
     success, error = self.compute_error(cur_pose)
 
-    # rospy.loginfo("error")
-    # rospy.loginfo(error)
-   
     if not success:
-      # We have reached our goal
-      self.pose_sub = None # Kill the subscriber
+      # We have reached our goal (or at least popped all points in the plan)
+      self.pose_sub.unregister() # Kill the subscriber
+      rospy.loginfo("self.pose_sub has been shutdown")
       self.speed = 0.0 # Set speed to zero so car stops
+        
+    rospy.loginfo("error = ")
+    rospy.loginfo(error)
       
     delta = self.compute_steering_angle(error)
 
-    # rospy.loginfo("Steer Angle")
+    rospy.loginfo("Steer Angle")
     
-    # rospy.loginfo(delta)
+    rospy.loginfo(delta)
+    print('\n')
 
     # Setup the control message
     ads = AckermannDriveStamped()
@@ -257,7 +249,7 @@ def main():
   # YOUR CODE HERE
 
   # Default values 
-  plan = '/planner_node/car_plan'
+  plan_topic = '/planner_node/car_plan'
   pose_topic = '/sim_car_pose/pose'
   plan_lookahead = 5
   translation_weight = 1.0
@@ -269,7 +261,7 @@ def main():
   speed = 1.0
 
   # Values from Launch file
-  plan = rospy.get_param("~plan_topic", None)
+  plan_topic = rospy.get_param("~plan_topic", None)
   pose_topic = rospy.get_param("~pose_topic", None)
   plan_lookahead = rospy.get_param("~plan_lookahead", None)
   translation_weight = rospy.get_param("~translation_weight", None)
@@ -287,17 +279,14 @@ def main():
   # Convert the plan msg to a list of 3-element numpy arrays
   #     Each array is of the form [x,y,theta]
   # Create a LineFollower object
-  plan_topic = rospy.wait_for_message('/planner_node/car_plan', PoseArray)
-  plan = []
-  for msg in plan_topic.poses:
+  plan_msg = rospy.wait_for_message(plan_topic, PoseArray)
+  plan = deque()
+  for msg in plan_msg.poses:
     x=msg.position.x
     y=msg.position.y
     theta= utils.quaternion_to_angle(msg.orientation)
-    pose = [x,y,theta]
-    if len(plan) == 0:
-      plan = pose 
-    else:
-      plan = np.vstack([plan, pose])
+    pose = np.array([x,y,theta])
+    plan.append(pose)
 
   # Create a clone follower
   lf = LineFollower(plan, pose_topic, plan_lookahead, translation_weight,
