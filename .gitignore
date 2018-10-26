@@ -1,4 +1,2 @@
-
-lab1/src/\.vscode/c_cpp_properties\.json
-
-lab1/src/\.vscode/
+# Ignore .pyc files since these are binaries compiled at runtime
+*.pyc
