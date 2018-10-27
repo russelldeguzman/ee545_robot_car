@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+from __future__ import (
+    division,
+)  # because python 2.7 division is a bug-causing nightmare
 import rospy
 import numpy as np
 import math
@@ -26,7 +29,7 @@ VIZ_TOPIC = "/laser_wanderer/rollouts"  # The topic to publish to for vizualizin
 MAX_PENALTY = 10000  # The penalty to apply when a configuration in a rollout
 # goes beyond the corresponding laser scan
 CAR_WIDTH = 0.3  # Total guess TBH. Need to check this - JH
-DETECTION_THRESH = 0.25  # Would be good to add this as a param to the launchfile
+DETECTION_THRESH = 0.5  # Would be good to add this as a param to the launchfile
 
 """
 Wanders around using minimum (steering angle) control effort while avoiding crashing
@@ -176,6 +179,8 @@ class LaserWanderer:
         # rospy.loginfo('%s' % rollout_pose)
         # YOUR CODE HERE
         cost = np.absolute(delta)
+        # rospy.loginfo("Delta Cost:")
+        # rospy.loginfo(cost)
         angle_index = []
         too_close_count = 0
         current_pose = [0, 0, 0]
@@ -196,17 +201,27 @@ class LaserWanderer:
             angle_index.append(
                 (int)((roll_angle - laser_msg.angle_min) / laser_msg.angle_increment)
             )
-        for idx in xrange(min(angle_index), max(angle_index)):
+        angle_index = np.arange(min(angle_index), max(angle_index) + 1)
+        rospy.loginfo(angle_index)
+        for idx in angle_index:
             laser_ray_dist = laser_msg.ranges[idx]
             # rospy.loginfo("dist: %s (wanted_pose: %s)| laser_ray_dist: %s" % (rollout_pose_distance,rollout_pose,laser_ray_dist ))
             if np.isfinite(laser_ray_dist) and rollout_pose_distance > (
                 laser_ray_dist - np.abs(self.laser_offset)
             ):
                 too_close_count += 1
-        if np.size(rollout_pose_angle) == 1 and too_close_count > 0:
+        hazard_prop = too_close_count / np.size(angle_index)
+        if np.size(angle_index) == 1 and too_close_count > 0:
             cost += MAX_PENALTY
-        elif too_close_count / np.size(rollout_pose_angle) >= DETECTION_THRESH:
+        elif hazard_prop >= DETECTION_THRESH:
             cost += MAX_PENALTY
+        else:
+            cost += hazard_prop * 30
+        # rospy.loginfo("Hazard_prop")
+        # rospy.loginfo(hazard_prop)
+        # rospy.loginfo("Cost:")
+        # rospy.loginfo(cost)
+        rospy.loginfo("\n")
         return cost
 
     """
@@ -237,11 +252,14 @@ class LaserWanderer:
         T = self.rollouts.shape[1]
         while rospy.Time.now().to_sec() - start < self.compute_time and traj_depth < T:
             for n in range(self.rollouts.shape[0]):
+                # rospy.loginfo(delta_costs[n])
                 delta_costs[n] += self.compute_cost(
                     self.deltas[n], self.rollouts[n][traj_depth], msg
                 )
             traj_depth += 1
-
+        # rospy.loginfo("Trajectory Depth:")
+        # rospy.loginfo(traj_depth)
+        # rospy.loginfo("\n")
         # Find the delta that has the smallest cost and execute it by publishing
         # YOUR CODE HERE
         # rospy.loginfo("%s" % delta_costs)
