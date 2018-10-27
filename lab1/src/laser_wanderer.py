@@ -192,15 +192,12 @@ class LaserWanderer:
         ):
             cost += MAX_PENALTY
             return cost
-        for i, roll_angle in enumerate(rollout_pose_angle):
-            rospy.loginfo(roll_angle)
-            rospy.loginfo(laser_msg.angle_min)
-            rospy.loginfo(laser_msg.angle_increment)
-            rospy.loginfo("\n")
-            angle_index[i] = (int)(
-                (roll_angle - laser_msg.angle_min) / laser_msg.angle_increment
+        for roll_angle in [min(rollout_pose_angle), max(rollout_pose_angle)]:
+            angle_index.append(
+                (int)((roll_angle - laser_msg.angle_min) / laser_msg.angle_increment)
             )
-            laser_ray_dist = laser_msg.ranges[angle_index]
+        for idx in xrange(min(angle_index), max(angle_index)):
+            laser_ray_dist = laser_msg.ranges[idx]
             # rospy.loginfo("dist: %s (wanted_pose: %s)| laser_ray_dist: %s" % (rollout_pose_distance,rollout_pose,laser_ray_dist ))
             if np.isfinite(laser_ray_dist) and rollout_pose_distance > (
                 laser_ray_dist - np.abs(self.laser_offset)
