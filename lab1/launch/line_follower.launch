@@ -1,7 +1,7 @@
 <launch>
    <node name = "line_follower" type="line_follower.py" pkg="lab1" output="screen">
    		<param name="plan_topic" type="string" value="/planner_node/car_plan"/>   		
-   		<param name="pose_topic" type="string" value="/sim_car_pose"/>
+   		<param name="pose_topic" type="string" value="/sim_car_pose/pose"/>
       <param name="plan_lookahead" type="double" value="1"/>
       <param name="translation_weight" type="double" value="1.0"/>
       <param name="rotation_weight" type="double" value=".5"/>
