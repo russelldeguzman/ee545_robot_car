@@ -1,0 +1,12 @@
+<launch>
+	  <node name="car_laser_wanderer" type="car_laser_wanderer.py" pkg="lab1"  output="screen">
+      <param name = "speed" type = "double" value="1.0"/>
+      <param name = 'min_delta' type = 'double' value='-0.34'/>
+      <param name = 'max_delta' type = 'double' value='0.341'/>
+      <param name = 'delta_incr' type = 'double' value='0.34'/>
+      <param name = 'T' type = 'int' value='300'/>
+      <param name = 'dt' type = 'double' value='0.01'/>
+      <param name = 'compute_time' type = 'double' value='0.09'/>
+      <param name = 'laser_offset' type = 'double' value='1.0'/>
+    </node>
+</launch>
