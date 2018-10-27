@@ -25,7 +25,8 @@ VIZ_TOPIC = "/laser_wanderer/rollouts"  # The topic to publish to for vizualizin
 
 MAX_PENALTY = 10000  # The penalty to apply when a configuration in a rollout
 # goes beyond the corresponding laser scan
-
+CAR_WIDTH = 0.3  # Total guess TBH. Need to check this - JH
+DETECTION_THRESH = 0.25  # Would be good to add this as a param to the launchfile
 
 """
 Wanders around using minimum (steering angle) control effort while avoiding crashing
@@ -48,13 +49,26 @@ class LaserWanderer:
     laser_offset: How much to shorten the laser measurements
   """
 
-    def __init__(self, rollouts, deltas, speed, compute_time, laser_offset):
+    def __init__(
+        self,
+        rollouts,
+        deltas,
+        speed,
+        compute_time,
+        laser_offset,
+        car_length,
+        car_width,
+        detection_thresh,
+    ):
         # Store the params for later
         self.rollouts = rollouts
         self.deltas = deltas
         self.speed = speed
         self.compute_time = compute_time
         self.laser_offset = laser_offset
+        self.detection_thresh = detection_thresh
+        self.car_length = car_length
+        self.car_width = car_width
 
         # YOUR CODE HERE
         self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size=1)
@@ -93,17 +107,24 @@ class LaserWanderer:
                 angles=(0, 0, self.current_pose[2]),
             )
             # M_inv = np.linalg.inv(M)
-            [x, y, z, w] = np.dot(M, np.array([self.rollouts[n][-1][0], self.rollouts[n][-1][1], 0, 1]).T)
-            
+            [x, y, z, w] = np.dot(
+                M, np.array([self.rollouts[n][-1][0], self.rollouts[n][-1][1], 0, 1]).T
+            )
+
             pose = Pose()
             xyzw_array = lambda o: np.array([o.x, o.y, o.z, o.w])
-            quat1 = [msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w]
+            quat1 = [
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+                msg.pose.orientation.w,
+            ]
             quat2_raw = utils.angle_to_quaternion(self.rollouts[n][-1][2])
             quat2 = xyzw_array(quat2_raw)
             # quat2 = [self.rollouts[n][-1][2][0], self.rollouts[n][-1][2][1], self.rollouts[n][-1][2][2], self.rollouts[n][-1][2][3]]
-            rospy.loginfo("Quaternion:")
+            # rospy.loginfo("Quaternion:")
             # rospy.loginfo(utils.angle_to_quaternion(self.rollouts[n][-1][2:]))
-            rospy.loginfo("\n")
+            # rospy.loginfo("\n")
             orientation_raw = transformations.quaternion_multiply(quat1, quat2)
             # rospy.loginfo(orientation_raw)
             pose.orientation = Quaternion(*orientation_raw)
@@ -121,8 +142,12 @@ class LaserWanderer:
   """
 
     def _compute_pose_angle(self, current_pose, rollout_pose):
-        delta_x = rollout_pose[0] - current_pose[0]
-        delta_y = rollout_pose[1] - current_pose[1]
+        delta_x = (
+            rollout_pose[0] - current_pose[0]
+        )  # What is the point of this step? current_pose[0]==0
+        delta_y = (
+            rollout_pose[1] - current_pose[1]
+        )  # What is the point of this step? current_pose[0]==0
         return np.arctan(delta_y / delta_x)
 
     """
@@ -151,29 +176,40 @@ class LaserWanderer:
         # rospy.loginfo('%s' % rollout_pose)
         # YOUR CODE HERE
         cost = np.absolute(delta)
+        angle_index = []
+        too_close_count = 0
         current_pose = [0, 0, 0]
-        rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
+        # rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
+        rollout_pose_angle = self.rollout_to_laser_angle(rollout_pose)
         rollout_pose_distance = np.linalg.norm(
             np.array(current_pose[:-1]) - np.array(rollout_pose[:-1])
         )
 
         # if the laser can't see this position, assign max penalty, (e.g. assume that there's something there)
         if (
-            rollout_pose_angle < laser_msg.angle_min
-            or rollout_pose_angle > laser_msg.angle_max
+            min(rollout_pose_angle) < laser_msg.angle_min
+            or max(rollout_pose_angle) > laser_msg.angle_max
         ):
             cost += MAX_PENALTY
             return cost
-        angle_index = (int)(
-            (rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment
-        )
-        laser_ray_dist = laser_msg.ranges[angle_index]
-        # rospy.loginfo("dist: %s (wanted_pose: %s)| laser_ray_dist: %s" % (rollout_pose_distance,rollout_pose,laser_ray_dist ))
-        if np.isfinite(laser_ray_dist) and rollout_pose_distance > (
-            laser_ray_dist - np.abs(self.laser_offset)
-        ):
+        for i, roll_angle in enumerate(rollout_pose_angle):
+            rospy.loginfo(roll_angle)
+            rospy.loginfo(laser_msg.angle_min)
+            rospy.loginfo(laser_msg.angle_increment)
+            rospy.loginfo("\n")
+            angle_index[i] = (int)(
+                (roll_angle - laser_msg.angle_min) / laser_msg.angle_increment
+            )
+            laser_ray_dist = laser_msg.ranges[angle_index]
+            # rospy.loginfo("dist: %s (wanted_pose: %s)| laser_ray_dist: %s" % (rollout_pose_distance,rollout_pose,laser_ray_dist ))
+            if np.isfinite(laser_ray_dist) and rollout_pose_distance > (
+                laser_ray_dist - np.abs(self.laser_offset)
+            ):
+                too_close_count += 1
+        if np.size(rollout_pose_angle) == 1 and too_close_count > 0:
             cost += MAX_PENALTY
-            return cost
+        elif too_close_count / np.size(rollout_pose_angle) >= DETECTION_THRESH:
+            cost += MAX_PENALTY
         return cost
 
     """
@@ -219,6 +255,29 @@ class LaserWanderer:
         drive_msg.drive.steering_angle = min_delta
         drive_msg.drive.speed = self.speed
         self.cmd_pub.publish(drive_msg)
+
+        """
+    Take a single pose from a rollout (defined relative the the racecar frame)
+        Current pose is assumed to be 0, 0, 0 in its own reference frame
+        roll_pose: [x, y, theta] in the base racecar reference frame
+    Returns the minimum and maximum angle to sweep with the laserscan
+    Note: we could just use our code straight out of lab0 for this, but the direct call to tf is cleaner,
+    and hopefully, faster.
+  """
+
+    # TODO: Loop this over all of the rollouts at program start and cache it to a file.
+    # Add try-except here to try to read that file and generate it if it doesn't exist.
+    def rollout_to_laser_angle(self, roll_pose):
+        M = transformations.compose_matrix(
+            translate=(roll_pose[0], roll_pose[1], 0), angles=(0, 0, roll_pose[2])
+        )
+        front_left = np.array([self.car_length / 2, self.car_width / 2, 0, 1])
+        front_right = np.array([self.car_length / 2, -self.car_width / 2, 0, 1])
+        [x, y, z, junk] = np.dot(M, front_left)
+        left_angle = np.arctan(y / x)
+        [x, y, z, junk] = np.dot(M, front_right)
+        right_angle = np.arctan(y / x)
+        return (left_angle, right_angle)
 
 
 ###CLASS DEFINITION ENDS
@@ -363,7 +422,16 @@ def main():
     )
 
     # Create the LaserWanderer
-    lw = LaserWanderer(rollouts, deltas, speed, compute_time, laser_offset)
+    lw = LaserWanderer(
+        rollouts,
+        deltas,
+        speed,
+        compute_time,
+        laser_offset,
+        car_length,
+        CAR_WIDTH,
+        DETECTION_THRESH,
+    )
 
     # Keep the node alive
     rospy.spin()
