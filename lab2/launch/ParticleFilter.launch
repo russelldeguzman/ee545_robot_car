@@ -1,0 +1,25 @@
+
+<launch>
+
+	<arg name="n_particles" default="1000"/>
+	<arg name="n_viz_particles" default="60" />
+	<arg name="motor_state_topic" default="/vesc/sensors/core" />
+	<arg name="servo_state_topic" default="/vesc/sensors/servo_position_command" />
+	<arg name="scan_topic" default="/scan"/>
+	<arg name="laser_ray_step" default="18"/> 
+	<arg name="exclude_max_range_rays" default="true"/>
+	<arg name="max_range_meters" default="11.0" />
+	<arg name="resample_type" default="low_variance" />
+	
+	<node pkg="lab2" type="ParticleFilter.py" name="Particle_filter" output="screen">
+		<param name="n_particles" value="$(arg n_particles)"/>
+		<param name="n_viz_particles" value="$(arg n_viz_particles)"/>
+		<param name="motor_state_topic" value="$(arg motor_state_topic)" />
+		<param name="servo_state_topic" value="$(arg servo_state_topic)" />
+		<param name="scan_topic" value="$(arg scan_topic)"/>
+		<param name="laser_ray_step" value="$(arg laser_ray_step)"/>
+    <param name="exclude_max_range_rays" value="$(arg exclude_max_range_rays)" />
+		<param name="max_range_meters" value="$(arg max_range_meters)" />
+    <param name="resample_type" value="$(arg resample_type)" />
+	</node>
+</launch>

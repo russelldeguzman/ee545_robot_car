@@ -1,0 +1,8 @@
+<launch>
+
+	<node pkg="lab2" type="MotionModel.py" name="motion_model" output="screen" >
+	  <param name="motor_state_topic" type="string" value="/vesc/sensors/core" />
+	  <param name="servo_state_topic" type="string" value="/vesc/sensors/servo_position_command" />
+	</node>
+
+</launch>

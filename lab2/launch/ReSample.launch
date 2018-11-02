@@ -1,0 +1,16 @@
+<launch>
+
+  <arg name="n_particles" default="100" />
+  <arg name="k_val" default="80" />
+  <arg name="resample_type" default="low_variance"/>
+  <arg name="trials" default="10" />
+
+  <node name="resample" type="ReSample.py" pkg="lab2" output="screen" >
+	  <param name="n_particles" value="$(arg n_particles) " />
+	  <param name="k_val" value="$(arg k_val) " />
+		<param name="resample_type" value="$(arg resample_type)"/>
+		<param name="trials" value="$(arg trials)" />
+  </node>
+
+
+</launch>

@@ -1,0 +1,18 @@
+<launch>
+
+	<include file="$(find racecar)/launch/includes/common/map_server.launch"/>
+
+  <arg name="bag_path" default="/home/car-user/racecar_ws/src/lab2/bags/laser_scans/laser_scan1.bag" />
+  <arg name="scan_topic" default="/scan" />
+	<arg name="laser_ray_step" default="18"/>
+	<arg name="exclude_max_range_rays" default="true" />
+	<arg name="max_range_meters" default="5.6" />
+	
+	<node pkg="lab2" type="SensorModel.py" name="sensor_model" output="screen">
+	  <param name="bag_path" value="$(arg bag_path) " />
+	  <param name="scan_topic" value="$(arg scan_topic) " />
+		<param name="laser_ray_step" value="$(arg laser_ray_step)"/>
+		<param name="exclude_max_range_rays" value="$(arg exclude_max_range_rays)" />
+		<param name="max_range_meters" value="$(arg max_range_meters)" />
+	</node> 
+</launch>
