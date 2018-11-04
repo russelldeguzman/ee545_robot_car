@@ -2,7 +2,7 @@
 
 	<include file="$(find racecar)/launch/includes/common/map_server.launch"/>
 
-  <arg name="bag_path" default="/home/car-user/racecar_ws/src/lab2/bags/laser_scans/laser_scan1.bag" />
+  <arg name="bag_path" default="/home/car-user/racecar_ws/src/ee545_robot_car/lab2/bags/laser_scans/laser_scan1.bag" />
   <arg name="scan_topic" default="/scan" />
 	<arg name="laser_ray_step" default="18"/>
 	<arg name="exclude_max_range_rays" default="true" />

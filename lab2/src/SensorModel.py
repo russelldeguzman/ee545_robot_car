@@ -85,6 +85,19 @@ class SensorModel:
     #   You may choose to use self.laser_angles and self.downsampled_angles here
     # YOUR CODE HERE
 
+    # Check to see if self.downsampled_angles is defined
+    if self.downsampled_angles is None:
+      self.laser_angles = np.linspace(msg.angle_min, msg.angle_max, len(msg.ranges), dtype=float)
+      rospy.loginfo(self.laser_angles.size)
+      self.downsampled_angles = np.array(self.laser_angles[::self.LASER_RAY_STEP])
+      rospy.loginfo(self.downsampled_angles.size)
+    # obs = np.array([[msg.ranges[::self.LASER_RAY_STEP]], [self.downsampled_angles]], dtype=np.float32)
+    rospy.loginfo(np.array(msg.ranges[::self.LASER_RAY_STEP]).size)
+    obs = np.vstack((msg.ranges[::self.LASER_RAY_STEP], self.downsampled_angles))
+    # rospy.loginfo(obs.size)
+    obs = np.float32(obs)
+    rospy.loginfo(obs.shape)
+    assert obs[0].shape[0] == obs[1].shape[0]
     self.apply_sensor_model(self.particles, obs, self.weights)
     self.weights /= np.sum(self.weights)
     
@@ -103,7 +116,7 @@ class SensorModel:
   def precompute_sensor_model(self, max_range_px):
 
     table_width = int(max_range_px) + 1
-    sensor_model_table = np.zeros((table_width,table_width))
+    sensor_model_table = np.zeros((table_width, table_width))
 
     # Populate sensor_model_table according to the laser beam model specified
     # in CH 6.3 of Probabilistic Robotics
@@ -121,8 +134,8 @@ class SensorModel:
     
     lambda_short = 1
     eta = 1
-    N = 0
     for d in xrange(table_width):
+      N = 0
       for r in xrange(table_width):
         # r is ztk, d is ztk*
         #Calculating P_hit, P_short, P_max, P_rand
@@ -184,7 +197,7 @@ if __name__ == '__main__':
 
   rospy.init_node("sensor_model", anonymous=True) # Initialize the node
 
-  bag_path = rospy.get_param("~bag_path", '/home/car-user/racecar_ws/src/ta_lab2/bags/laser_scans/laser_scan1.bag')
+  bag_path = rospy.get_param("~bag_path", '/home/car-user/racecar_ws/src/lab2/bags/laser_scans/laser_scan1.bag')
   scan_topic = rospy.get_param("~scan_topic", "/scan") # The topic containing laser scans
   laser_ray_step = int(rospy.get_param("~laser_ray_step")) # Step for downsampling laser scans
   exclude_max_range_rays = bool(rospy.get_param("~exclude_max_range_rays")) # Whether to exclude rays that are beyond the max range
