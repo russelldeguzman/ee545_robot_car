@@ -3,6 +3,7 @@
 import rospy
 import numpy as np
 from threading import Lock
+import random
 
 '''
   Provides methods for re-sampling from a distribution represented by weighted samples
@@ -23,6 +24,8 @@ class ReSampler:
     # cache computations that will be reused in the re-sampling functions
     # YOUR CODE HERE?
     self.prev_particles = self.particles
+    self.particle_idxs = np.zeros(len(self.particles))
+    self.particle_idxs[:] = [i for i in range(len(self.particles))]
     if state_lock is None:
       self.state_lock = Lock()
     else:
@@ -34,8 +37,8 @@ class ReSampler:
   def resample_naiive(self):
     self.state_lock.acquire()
     # YOUR CODE HERE
-    self.prev_particles = self.particles
-    self.particles[:] = [np.random.choice(self.prev_particles, 1, self.weights)[0] for i in range(len(self.particles))]
+    chosen_idxs = [int(np.random.choice(self.particle_idxs, 1, p=self.weights)) for i in range(len(self.particles))]
+    self.particles[:] = [self.prev_particles[chosen_idxs[i]] for i in range(len(self.prev_particles))]
     self.state_lock.release()
 
   '''
@@ -47,11 +50,11 @@ class ReSampler:
 
     # YOUR CODE HERE
     self.prev_particles = self.particles
-    r = np.random.rand(0,(1/len(self.particles)))
+    r = random.uniform(0,1/float(len(self.particles)))
     c = self.weights[0]
     i = 0
     for m in range(len(self.particles)):
-        U = r + ((m - 1) * (1/len(self.particles))
+        U = r + m * (1/float(len(self.particles)))
         while U > c:
             i += 1
             c += self.weights[i]
