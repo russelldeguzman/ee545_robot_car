@@ -120,7 +120,8 @@ class ParticleFilter():
     # YOUR CODE HERE
     for i in range(len(self.particles)):
         in_bounds = 0
-        w = 0, h = 0
+        w = 0
+        h = 0
         while not in_bounds:
             w = np.random.randint(0, self.permissible_region.shape[0])
             h = np.random.randint(0, self.permissible_region.shape[1])
@@ -181,7 +182,8 @@ class ParticleFilter():
     rcvd_pose = msg.pose.position
     for i in range(len(self.particles)):
         in_bounds = 0
-        w = 0, h = 0
+        w = 0
+        h = 0
         while not in_bounds:
             w = np.random.normal(rcvd_pose.x, 5) # good std deviation?
             h = np.random.normal(rcvd_pose.y, 5) # good std deviation?
