@@ -126,9 +126,9 @@ class ParticleFilter():
             w = np.random.randint(0, self.permissible_region.shape[0])
             h = np.random.randint(0, self.permissible_region.shape[1])
             in_bounds = self.permissible_region[w][h]
-        self.particles[i] = util.point([w,h])
-    utils.map_to_world(self.particles,self.map_info)
-    self.weights[:] = [1 / len(self.weights)]
+        self.particles[i] = [w,h,0]
+    Utils.map_to_world(self.particles,self.map_info)
+    self.weights[:] = [1 / float(len(self.particles))]
     self.state_lock.release()
 
   '''
@@ -165,7 +165,7 @@ class ParticleFilter():
     # YOUR CODE HERE
     x = np.sum([self.weights[i] * self.particles[i][0] for i in range(len(self.particles))])
     y = np.sum([self.weights[i] * self.particles[i][1] for i in range(len(self.particles))])
-    theta = np.atan2(np.sum([np.sin(self.particles[i][2]) for i in range(len(self.particles))]), np.sum([np.cos(self.particles[i][2]) for i in range(len(self.particles))]))
+    theta = np.arctan2(np.sum([np.sin(self.particles[i][2]) for i in range(len(self.particles))]), np.sum([np.cos(self.particles[i][2]) for i in range(len(self.particles))]))
     return [x, y, theta]
 
   '''
@@ -188,9 +188,9 @@ class ParticleFilter():
             w = np.random.normal(rcvd_pose.x, 5) # good std deviation?
             h = np.random.normal(rcvd_pose.y, 5) # good std deviation?
             in_bounds = self.permissible_region[w][h]
-        self.particles[i] = util.point([w,h])
-    utils.map_to_world(self.particles,self.map_info)
-    self.weights[:] = [1 / len(self.weights)]
+        self.particles[i] = Utils.point([w,h])
+    Utils.map_to_world(self.particles,self.map_info)
+    self.weights[:] = [1 / float(len(self.particles))]
     self.state_lock.release()
 
   '''
