@@ -10,16 +10,17 @@ import rosbag
 import matplotlib.pyplot as plt
 import utils as Utils
 from sensor_msgs.msg import LaserScan
+import math
 
 THETA_DISCRETIZATION = 112 # Discretization of scanning angle
 INV_SQUASH_FACTOR = 0.2    # Factor for helping the weight distribution to be less peaked
 
 # YOUR CODE HERE (Set these values and use them in precompute_sensor_model)
-Z_SHORT =  # Weight for short reading
-Z_MAX =  # Weight for max reading
-Z_RAND =  # Weight for random reading
-SIGMA_HIT = # Noise value for hit reading
-Z_HIT =  # Weight for hit reading
+Z_SHORT = 0.2 # Weight for short reading
+Z_MAX =  0.1 # Weight for max reading
+Z_RAND = 0.3 # Weight for random reading
+SIGMA_HIT = 1 # Noise value for hit reading
+Z_HIT =  0.5 # Weight for hit reading
 
 ''' 
   Weights particles according to their agreement with the observed data
@@ -84,6 +85,22 @@ class SensorModel:
     #   Set all range measurements that are NAN or 0.0 to self.MAX_RANGE_METERS
     #   You may choose to use self.laser_angles and self.downsampled_angles here
     # YOUR CODE HERE
+  
+    self.laser_angles = np.linspace(msg.angle_min, msg.angle_max, len(msg.ranges), dtype=float)
+    self.downsampled_angles = np.array(self.laser_angles[::self.LASER_RAY_STEP])
+    obs_ranges = np.array(msg.ranges[::self.LASER_RAY_STEP], dtype=float )
+    if(len(self.downsampled_angles)!= len(obs_ranges)):
+      print("Array dimension mismatch")
+
+    for x in range(len(obs_ranges) ):
+      if(math.isnan(obs_ranges[x]) or obs_ranges[x]==0 ):
+        obs_ranges[x] = self.MAX_RANGE_METERS
+
+
+    obs = np.row_stack((obs_ranges,self.downsampled_angles))    
+    obs = np.float32(obs)
+
+
 
     self.apply_sensor_model(self.particles, obs, self.weights)
     self.weights /= np.sum(self.weights)
@@ -119,6 +136,27 @@ class SensorModel:
     #     when the expected measurement is d (in pixels)
     # Note that the 'self' parameter is completely unused in this function
     
+    lambda_short = 1
+    eta = 1
+
+    for d in xrange(table_width):
+      N = 0
+      for r in xrange(table_width):
+        # r is ztk, d is ztk*
+        #Calculating P_hit, P_short, P_max, P_rand
+        P_hit = eta * (1.0/(2.0*np.pi * np.power(SIGMA_HIT,2) )) * np.exp( -0.5*np.power((r-d),2) / np.power(SIGMA_HIT, 2) )
+        P_short = float( eta * lambda_short * (np.exp(-lambda_short*r)) ) 
+        P_max = (0,1.0)[r==(table_width-1)]
+        P_rand = 1.0/max_range_px
+        P_total = Z_HIT* P_hit + Z_SHORT*P_short + Z_MAX*P_max + Z_RAND*P_rand
+        sensor_model_table[r,d] = P_total
+        
+        # N is normalizer so that the sum of elements in each column adds up to 1
+        N += P_total
+
+      sensor_model_table[:,d] /= N 
+
+   
     return sensor_model_table
 
   '''
@@ -160,7 +198,7 @@ if __name__ == '__main__':
 
   rospy.init_node("sensor_model", anonymous=True) # Initialize the node
 
-  bag_path = rospy.get_param("~bag_path", '/home/car-user/racecar_ws/src/ta_lab2/bags/laser_scans/laser_scan1.bag')
+  bag_path = rospy.get_param("~bag_path", 'home/rahulr/rrudub_ws/src/lab2/bags/laser_scans/laser_scan1.bag')
   scan_topic = rospy.get_param("~scan_topic", "/scan") # The topic containing laser scans
   laser_ray_step = int(rospy.get_param("~laser_ray_step")) # Step for downsampling laser scans
   exclude_max_range_rays = bool(rospy.get_param("~exclude_max_range_rays")) # Whether to exclude rays that are beyond the max range
