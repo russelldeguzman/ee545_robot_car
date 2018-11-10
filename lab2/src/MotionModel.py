@@ -104,7 +104,7 @@ class KinematicMotionModel:
 
     #Convert the current speed and delta
     curr_speed = (msg.state.speed - self.SPEED_TO_ERPM_OFFSET)/self.SPEED_TO_ERPM_GAIN
-    curr_delta = (servo_msg.data - self.STEERING_TO_SERVO_OFFSET)/self.STEERING_TO_SERVO_GAIN
+    curr_delta = (self.last_servo_cmd - self.STEERING_TO_SERVO_OFFSET)/self.STEERING_TO_SERVO_GAIN
 
 
     #Create the noisy speed and delta arrays
@@ -121,7 +121,7 @@ class KinematicMotionModel:
     noisy_KM_theta = 0
 
     #Calculate the Kinematic Model additions
-    deltaTDuration = vesc_msg.header.stamp - self.last_vesc_stamp
+    deltaTDuration = msg.header.stamp - self.last_vesc_stamp
     deltaT = deltaTDuration.to_sec()
     beta = np.arctan(np.tan(noisy_delta_array)/2)
     KM_theta = noisy_speed_array/self.CAR_LENGTH*np.sin(2*beta)*deltaT

@@ -179,7 +179,10 @@ class ParticleFilter():
     # Updates the particles in place
     # Updates the weights to all be equal, and sum to one
     # YOUR CODE HERE
-    rcvd_pose = msg.pose.position
+    rospy.loginfo("this is the msg.pose.position")
+    rospy.loginfo()
+    rcvd_pose.x = msg.pose.x
+    rcvd_pose.y = msg.pose.y
     for i in range(len(self.particles)):
         in_bounds = 0
         w = 0
