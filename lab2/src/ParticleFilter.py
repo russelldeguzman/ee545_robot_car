@@ -134,7 +134,7 @@ class ParticleFilter():
     self.particles[0:n_pts*self.N_PARTICLE_ANGLES, 2] = np.repeat(angles, n_pts)
     Utils.map_to_world(self.particles, self.map_info)
     self.weights[:] = [1 / float(self.N_PARTICLES)]
-    Utils.map_to_world(self.particles, self.map_info)
+    # Utils.map_to_world(self.particles, self.map_info)
     # self.weights = np.ones(self.particles.shape[0]) / float(self.particles.shape[0])
     self.state_lock.release()
 
@@ -174,7 +174,7 @@ class ParticleFilter():
     x = np.sum([self.weights[i] * self.particles[i][0] for i in range(len(self.particles))])
     y = np.sum([self.weights[i] * self.particles[i][1] for i in range(len(self.particles))])
     theta = np.arctan2(np.sum([np.sin(self.particles[i][2]) for i in range(len(self.particles))]), np.sum([np.cos(self.particles[i][2]) for i in range(len(self.particles))]))
-    return [x, y, theta]
+    return np.array([x, y, theta])
 
   '''
     Callback for '/initialpose' topic. RVIZ publishes a message to this topic when you specify an initial pose
