@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import range_libc
 
+from timeit import default_timer as timer
 import rosbag
 import rospy
 import utils as Utils
@@ -143,33 +144,18 @@ class SensorModel:
     lambda_short = 1
     eta = 1
 
+    start = timer()
     d = np.arange(0, table_width)
-    # r = np.arange(0, table_width)
     dd, rr = np.meshgrid(d, d, sparse=False)
     sensor_model_table += Z_HIT * (eta * (1.0/(2.0*np.pi * np.power(SIGMA_HIT,2) )) * np.exp( -0.5*np.power((rr-dd),2) / np.power(SIGMA_HIT, 2) ))
     sensor_model_table += Z_SHORT * (eta * lambda_short * (np.exp(-lambda_short*rr)))
     sensor_model_table += Z_MAX * np.where(rr == table_width - 1, 1.0, 0)
     sensor_model_table += Z_RAND / (max_range_px * np.ones((table_width, table_width)))
     sensor_model_table = sensor_model_table / sensor_model_table.sum(axis=1, keepdims=True)  # https://stackoverflow.com/questions/43644320/how-to-make-numpy-array-column-sum-up-to-1
+    end = timer()
+    print("Vectorized code executed in:")
+    print(end-start)
 
-    # for d in xrange(table_width):
-    #   N = 0
-    #   for r in xrange(table_width):
-    #     # r is ztk, d is ztk*
-    #     #Calculating P_hit, P_short, P_max, P_rand
-    #     P_hit = eta * (1.0/(2.0*np.pi * np.power(SIGMA_HIT,2) )) * np.exp( -0.5*np.power((r-d),2) / np.power(SIGMA_HIT, 2) )
-    #     P_short = float( eta * lambda_short * (np.exp(-lambda_short*r)) ) 
-    #     P_max = (0,1.0)[r==(table_width-1)]
-    #     P_rand = 1.0/max_range_px
-    #     P_total = Z_HIT* P_hit + Z_SHORT*P_short + Z_MAX*P_max + Z_RAND*P_rand
-    #     sensor_model_table[r,d] = P_total
-        
-    #     # N is normalizer so that the sum of elements in each column adds up to 1
-    #     N += P_total
-
-    #   sensor_model_table[:,d] /= N 
-
-   
     return sensor_model_table
 
   '''
