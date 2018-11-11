@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import division
+
 import rospy
 import numpy as np
 import time
@@ -61,6 +63,8 @@ class ParticleFilter():
     self.state_lock = Lock() # A lock used to prevent concurrency issues. You do not need to worry about this
 
     self.tfl = tf.TransformListener() # Transforms points between coordinate frames
+    self.permit_coords = None
+    self.N_PARTICLE_ANGLES = 8  # Number of variations in angle that will be instantiated as different particles for each sampled [x, y] coord during intialize_global
 
     # Get the map
     print("Getting map from service: ", MAP_TOPIC)
@@ -72,9 +76,10 @@ class ParticleFilter():
     # Create numpy array representing map for later use
     array_255 = np.array(map_msg.data).reshape((map_msg.info.height, map_msg.info.width))
     self.permissible_region = np.zeros_like(array_255, dtype=bool)
-    self.permissible_region[array_255==0] = 1 # Numpy array of dimension (map_msg.info.height, map_msg.info.width),
+    self.permissible_region[array_255 == 0] = 1 # Numpy array of dimension (map_msg.info.height, map_msg.info.width),
                                               # With values 0: not permissible, 1: permissible
-
+    x_perm, y_perm = np.where(self.permissible_region == 1)
+    self.permit_coords = np.vstack((x_perm, y_perm)).T
     # Globally initialize the particles
     self.initialize_global()
 
@@ -101,7 +106,6 @@ class ParticleFilter():
 
     # Subscribe to the '/initialpose' topic. Publised by RVIZ. See clicked_pose_cb function in this file for more info
     self.pose_sub  = rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.clicked_pose_cb, queue_size=1)
-
     print('Initialization complete')
 
   '''
@@ -119,17 +123,19 @@ class ParticleFilter():
     # Update weights in place so that all particles have the same weight and the
     # sum of the weights is one.
     # YOUR CODE HERE
-    for i in range(len(self.particles)):
-        in_bounds = 0
-        w = 0
-        h = 0
-        while not in_bounds:
-            w = np.random.randint(0, self.permissible_region.shape[0])
-            h = np.random.randint(0, self.permissible_region.shape[1])
-            in_bounds = self.permissible_region[w][h]
-        self.particles[i] = [w,h,0]
-    Utils.map_to_world(self.particles,self.map_info)
-    self.weights[:] = [1 / float(len(self.particles))]
+    n_pts = int(self.N_PARTICLES / self.N_PARTICLE_ANGLES)
+    permit_inds = np.random.choice(self.permit_coords.shape[0], size=n_pts, replace=False)  # Uniformly samples from all permitted coordinates
+    angles, step = np.linspace(0, 2*np.pi, self.N_PARTICLE_ANGLES, retstep=True)
+    rand_offset = np.random.uniform(low=0.0, high=step)
+    angles += rand_offset
+    angles = ((angles + np.pi) % (2*np.pi)) - np.pi # Maps angles to interval [-pi : pi)
+    # Build an array of particles that creates all combinations of [x,y] and the thetas in angles[:]
+    self.particles[0:n_pts*self.N_PARTICLE_ANGLES, :2] = np.tile(self.permit_coords[permit_inds], (self.N_PARTICLE_ANGLES, 1))
+    self.particles[0:n_pts*self.N_PARTICLE_ANGLES, 2] = np.repeat(angles, n_pts)
+    Utils.map_to_world(self.particles, self.map_info)
+    self.weights[:] = [1 / float(self.N_PARTICLES)]
+    Utils.map_to_world(self.particles, self.map_info)
+    # self.weights = np.ones(self.particles.shape[0]) / float(self.particles.shape[0])
     self.state_lock.release()
 
   '''
@@ -139,7 +145,7 @@ class ParticleFilter():
       stamp: The time at which this pose was calculated, defaults to None - resulting
              in using the time at which this function was called as the stamp
   '''
-  def publish_tf(self,pose,stamp=None):
+  def publish_tf(self, pose, stamp=None):
     if stamp is None:
         stamp = rospy.Time.now()
     try:
@@ -164,6 +170,7 @@ class ParticleFilter():
   '''
   def expected_pose(self):
     # YOUR CODE HERE
+    assert np.allclose(np.sum(self.weights), 1), "self.weights does not sum to 1"
     x = np.sum([self.weights[i] * self.particles[i][0] for i in range(len(self.particles))])
     y = np.sum([self.weights[i] * self.particles[i][1] for i in range(len(self.particles))])
     theta = np.arctan2(np.sum([np.sin(self.particles[i][2]) for i in range(len(self.particles))]), np.sum([np.cos(self.particles[i][2]) for i in range(len(self.particles))]))
@@ -188,27 +195,27 @@ class ParticleFilter():
     rcvd_pose_y = msg.pose.pose.position.y
     rcvd_pose_theta = Utils.quaternion_to_angle(msg.pose.pose.orientation) 
 
-    # map_img_temp, map_info_temp =Utils.get_map(MAP_TOPIC) 
-
     map_pose = np.array((rcvd_pose_x, rcvd_pose_y, rcvd_pose_theta), ndmin = 2 )
     Utils.world_to_map(map_pose, self.map_info)
 
     for i in range(len(self.particles)):
-        rospy.loginfo("This is the beginning of the for loop")
-        in_bounds = 0
-        w = 0
-        h = 0
-        while not in_bounds:
-            rospy.loginfo("This is if the position is not in bounds") 
-            w = int (np.random.normal(map_pose[:,0], 5) )# good std deviation?
-            h = int (np.random.normal(map_pose[:,1], 5) ) # good std deviation?
-            in_bounds = self.permissible_region[w][h]
-            rospy.loginfo(w) 
-            rospy.loginfo(h)
-            rospy.loginfo(in_bounds)
+      # rospy.loginfo("This is the beginning of the for loop")
+      in_bounds = 0
+      x_samp = 0
+      y_samp = 0
+      while not in_bounds:
+        # rospy.loginfo("This is if the position is not in bounds") 
+        x_samp = int (np.random.normal(map_pose[:,0], .01) )# good std deviation?
+        y_samp = int (np.random.normal(map_pose[:,1], .01) ) # good std deviation?
+        in_bounds = self.permissible_region[y_samp][x_samp]
+        # rospy.loginfo(x_samp) 
+        # rospy.loginfo(y_samp)
+        # rospy.loginfo(in_bounds)
 
-        self.particles[i] = [w,h,map_pose[:,2]]
-        rospy.loginfo("This is the beginning of the for loop")
+      self.particles[i] = [x_samp,y_samp,map_pose[:,2]]
+      # rospy.loginfo("self.particles.shape")
+      # rospy.loginfo(self.particles.shape)
+      # rospy.loginfo("This is the end of the for loop")
 
     Utils.map_to_world(self.particles,self.map_info)
     self.weights[:] = [1 / float(len(self.particles))]
@@ -246,7 +253,7 @@ class ParticleFilter():
     if self.particle_pub.get_num_connections() > 0:
       if self.particles.shape[0] > self.N_VIZ_PARTICLES:
         # randomly downsample particles
-        proposal_indices = np.random.choice(self.particle_indices, self.N_VIZ_PARTICLES, p=self.weights)
+        proposal_indices = np.random.choice(self.particle_indices, size=self.N_VIZ_PARTICLES, replace=False, p=self.weights)
         # proposal_indices = np.random.choice(self.particle_indices, self.N_VIZ_PARTICLES)
         self.publish_particles(self.particles[proposal_indices,:])
       else:

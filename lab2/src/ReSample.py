@@ -1,9 +1,15 @@
 #!/usr/bin/env python
 
-import rospy
-import numpy as np
-from threading import Lock
+from __future__ import division
+
 import random
+from threading import Lock
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+import rospy
+
 
 '''
   Provides methods for re-sampling from a distribution represented by weighted samples
@@ -23,9 +29,8 @@ class ReSampler:
     # For speed purposes, you may wish to add additional member variable(s) that
     # cache computations that will be reused in the re-sampling functions
     # YOUR CODE HERE?
-    self.prev_particles = self.particles
-    self.particle_idxs = np.zeros(len(self.particles))
-    self.particle_idxs[:] = [i for i in range(len(self.particles))]
+    self.prev_particles = self.particles.copy()
+    self.particle_idxs = range(len(self.prev_particles))
     if state_lock is None:
       self.state_lock = Lock()
     else:
@@ -37,8 +42,9 @@ class ReSampler:
   def resample_naiive(self):
     self.state_lock.acquire()
     # YOUR CODE HERE
-    chosen_idxs = [int(np.random.choice(self.particle_idxs, 1, p=self.weights)) for i in range(len(self.particles))]
-    self.particles[:] = [self.prev_particles[chosen_idxs[i]] for i in range(len(self.prev_particles))]
+    self.prev_particles = self.particles.copy()
+    chosen_idxs = np.random.choice(self.particle_idxs, size=len(self.particles), replace=True, p=self.weights)
+    self.particles[:] = [self.prev_particles[i] for i in chosen_idxs]
     self.state_lock.release()
 
   '''
@@ -49,7 +55,7 @@ class ReSampler:
     self.state_lock.acquire()
 
     # YOUR CODE HERE
-    self.prev_particles = self.particles
+    self.prev_particles = self.particles.copy()
     r = random.uniform(0,1/float(len(self.particles)))
     c = self.weights[0]
     i = 0

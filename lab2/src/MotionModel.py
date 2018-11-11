@@ -1,24 +1,28 @@
 #!/usr/bin/env python
 
-import rospy
-import numpy as np
-import utils as Utils
-from std_msgs.msg import Float64
+from __future__ import division
+
 from threading import Lock
-from nav_msgs.msg import Odometry
-from vesc_msgs.msg import VescStateStamped
+
 import matplotlib.pyplot as plt
+import numpy as np
+
+import rospy
+import utils as Utils
+from nav_msgs.msg import Odometry
+from std_msgs.msg import Float64
+from vesc_msgs.msg import VescStateStamped
 
 # YOUR CODE HERE (Set these values and use them in motion_cb)
 
 #This is the control noise that we feed into kinematic model
-KM_V_NOISE = .05 # Kinematic car velocity noise std dev
-KM_DELTA_NOISE = .05 # Kinematic car delta noise std dev
+KM_V_NOISE = .025 # Kinematic car velocity noise std dev
+KM_DELTA_NOISE = .10 # Kinematic car delta noise std dev
 
 #This is is the position and angle noise after propagating through the kinematic model
-KM_X_FIX_NOISE = .5 # Kinematic car x position constant noise std dev
-KM_Y_FIX_NOISE = .5 # Kinematic car y position constant noise std dev
-KM_THETA_FIX_NOISE = .5 # Kinematic car theta constant noise std dev
+KM_X_FIX_NOISE = .025 # Kinematic car x position constant noise std dev
+KM_Y_FIX_NOISE = .025 #2 Kinematic car y position constant noise std dev
+KM_THETA_FIX_NOISE = .025 # Kinematic car theta constant noise std dev
 
 '''
   Propagates the particles forward based on the velocity and steering angle of the car
@@ -116,20 +120,21 @@ class KinematicMotionModel:
     noisy_KM_y = np.random.normal(0, KM_Y_FIX_NOISE, len(self.particles))
     noisy_KM_theta = np.random.normal(0, KM_THETA_FIX_NOISE, len(self.particles))
 
-    noisy_KM_x = 0
-    noisy_KM_y = 0
-    noisy_KM_theta = 0
+    # noisy_KM_x = 0
+    # noisy_KM_y = 0
+    # noisy_KM_theta = 0
 
     #Calculate the Kinematic Model additions
     deltaTDuration = msg.header.stamp - self.last_vesc_stamp
     deltaT = deltaTDuration.to_sec()
-    beta = np.arctan(np.tan(noisy_delta_array)/2)
+    beta = np.arctan(np.tan(noisy_delta_array) * 0.5 )
     KM_theta = noisy_speed_array/self.CAR_LENGTH*np.sin(2*beta)*deltaT
+    assert np.any((KM_theta <= 2*np.pi, KM_theta >= 0.0)), "KM_theta is not within the range [0, 2*pi]"
 
     # KM_theta =  np.remainder( (KM_theta_2pi + np.full((len(KM_theta_2pi),1), np.pi)), np.full((len(KM_theta_2pi),1), 2*np.pi) ) - np.full((len(KM_theta_2pi),1), np.pi)
 
-    KM_X = self.CAR_LENGTH/np.sin(2*beta)*(np.sin(KM_theta)-np.sin(self.particles[:,2]))
-    KM_Y = self.CAR_LENGTH/np.sin(2*beta)*(-np.cos(KM_theta)+np.cos(self.particles[:,2]))
+    KM_X = self.CAR_LENGTH/np.sin(2*beta)*(np.sin(self.particles[:,2] + KM_theta)-np.sin(self.particles[:,2]))
+    KM_Y = self.CAR_LENGTH/np.sin(2*beta)*(-np.cos(self.particles[:,2] + KM_theta)+np.cos(self.particles[:,2]))
 
     # rospy.loginfo("This is the current speed")
     # rospy.loginfo(curr_speed)
@@ -159,13 +164,13 @@ class KinematicMotionModel:
     self.particles[:,1] = self.particles[:,1] + KM_Y + noisy_KM_y
     self.particles[:,2] = self.particles[:,2] + KM_theta + noisy_KM_theta
 
-    rospy.loginfo("This is the average X position of particles")
-    rospy.loginfo(np.mean(self.particles[:,0]))
-    rospy.loginfo("This is the average Y position of particles")
-    rospy.loginfo(np.mean(self.particles[:,1]))
-    rospy.loginfo("This is the average Theta position of particles")
-    rospy.loginfo(np.mean(self.particles[:,2]))
-    rospy.loginfo("\n")
+    # rospy.loginfo("This is the average X position of particles")
+    # rospy.loginfo(np.mean(self.particles[:,0]))
+    # rospy.loginfo("This is the average Y position of particles")
+    # rospy.loginfo(np.mean(self.particles[:,1]))
+    # rospy.loginfo("This is the average Theta position of particles")
+    # rospy.loginfo(np.mean(self.particles[:,2]))
+    # rospy.loginfo("\n")
   
     self.last_vesc_stamp = msg.header.stamp
     self.state_lock.release()
@@ -175,7 +180,7 @@ class KinematicMotionModel:
 '''
 
 TEST_SPEED = 1.0 # meters/sec
-TEST_STEERING_ANGLE = .34 # radians
+TEST_STEERING_ANGLE = 0.25 # radians
 TEST_DT = 1.0 # seconds
 
 if __name__ == '__main__':

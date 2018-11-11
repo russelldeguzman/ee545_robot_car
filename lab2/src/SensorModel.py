@@ -1,16 +1,21 @@
 #!/usr/bin/env python
 
-import numpy as np
-import rospy
-import range_libc
+from __future__ import division
+
+import math
 import time
 from threading import Lock
-from nav_msgs.srv import GetMap
-import rosbag
+
 import matplotlib.pyplot as plt
+import numpy as np
+import range_libc
+
+from timeit import default_timer as timer
+import rosbag
+import rospy
 import utils as Utils
+from nav_msgs.srv import GetMap
 from sensor_msgs.msg import LaserScan
-import math
 
 THETA_DISCRETIZATION = 112 # Discretization of scanning angle
 INV_SQUASH_FACTOR = 0.2    # Factor for helping the weight distribution to be less peaked
@@ -89,7 +94,7 @@ class SensorModel:
     self.laser_angles = np.linspace(msg.angle_min, msg.angle_max, len(msg.ranges), dtype=float)
     self.downsampled_angles = np.array(self.laser_angles[::self.LASER_RAY_STEP])
     obs_ranges = np.array(msg.ranges[::self.LASER_RAY_STEP], dtype=float )
-    if(len(self.downsampled_angles)!= len(obs_ranges)):
+    if(len(self.downsampled_angles) != len(obs_ranges)):
       print("Array dimension mismatch")
 
     for x in range(len(obs_ranges) ):
@@ -139,24 +144,18 @@ class SensorModel:
     lambda_short = 1
     eta = 1
 
-    for d in xrange(table_width):
-      N = 0
-      for r in xrange(table_width):
-        # r is ztk, d is ztk*
-        #Calculating P_hit, P_short, P_max, P_rand
-        P_hit = eta * (1.0/(2.0*np.pi * np.power(SIGMA_HIT,2) )) * np.exp( -0.5*np.power((r-d),2) / np.power(SIGMA_HIT, 2) )
-        P_short = float( eta * lambda_short * (np.exp(-lambda_short*r)) ) 
-        P_max = (0,1.0)[r==(table_width-1)]
-        P_rand = 1.0/max_range_px
-        P_total = Z_HIT* P_hit + Z_SHORT*P_short + Z_MAX*P_max + Z_RAND*P_rand
-        sensor_model_table[r,d] = P_total
-        
-        # N is normalizer so that the sum of elements in each column adds up to 1
-        N += P_total
+    start = timer()
+    d = np.arange(0, table_width)
+    dd, rr = np.meshgrid(d, d, sparse=False)
+    sensor_model_table += Z_HIT * (eta * (1.0/(2.0*np.pi * np.power(SIGMA_HIT,2) )) * np.exp( -0.5*np.power((rr-dd),2) / np.power(SIGMA_HIT, 2) ))
+    sensor_model_table += Z_SHORT * (eta * lambda_short * (np.exp(-lambda_short*rr)))
+    sensor_model_table += Z_MAX * np.where(rr == table_width - 1, 1.0, 0)
+    sensor_model_table += Z_RAND / (max_range_px * np.ones((table_width, table_width)))
+    sensor_model_table = sensor_model_table / sensor_model_table.sum(axis=1, keepdims=True)  # https://stackoverflow.com/questions/43644320/how-to-make-numpy-array-column-sum-up-to-1
+    end = timer()
+    print("Vectorized code executed in:")
+    print(end-start)
 
-      sensor_model_table[:,d] /= N 
-
-   
     return sensor_model_table
 
   '''
@@ -226,9 +225,9 @@ if __name__ == '__main__':
   angle_step = 25
   particles = np.zeros((angle_step * permissible_x.shape[0],3))
   for i in xrange(angle_step):
-    particles[i*(particles.shape[0]/angle_step):(i+1)*(particles.shape[0]/angle_step),0] = permissible_y[:]
-    particles[i*(particles.shape[0]/angle_step):(i+1)*(particles.shape[0]/angle_step),1] = permissible_x[:]
-    particles[i*(particles.shape[0]/angle_step):(i+1)*(particles.shape[0]/angle_step),2] = i*(2*np.pi / angle_step)
+    particles[i*(particles.shape[0]//angle_step):(i+1)*(particles.shape[0]//angle_step),0] = permissible_y[:]
+    particles[i*(particles.shape[0]//angle_step):(i+1)*(particles.shape[0]//angle_step),1] = permissible_x[:]
+    particles[i*(particles.shape[0]//angle_step):(i+1)*(particles.shape[0]//angle_step),2] = i*(2*np.pi / angle_step)
   
   Utils.map_to_world(particles, map_info)
   weights = np.ones(particles.shape[0]) / float(particles.shape[0])
@@ -278,4 +277,3 @@ if __name__ == '__main__':
     img[permissible_y[i],permissible_x[i]] = weights[i]
   plt.imshow(img)
   plt.show()
-  
