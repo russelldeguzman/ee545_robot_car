@@ -68,6 +68,7 @@ class ParticleFilter():
     map_msg = rospy.ServiceProxy(MAP_TOPIC, GetMap)().map # The map, will get passed to init of sensor model
     self.map_info = map_msg.info # Save info about map for later use
 
+
     # Create numpy array representing map for later use
     array_255 = np.array(map_msg.data).reshape((map_msg.info.height, map_msg.info.width))
     self.permissible_region = np.zeros_like(array_255, dtype=bool)
@@ -183,8 +184,15 @@ class ParticleFilter():
     # rospy.loginfo(msg.pose.x)
     # rospy.loginfo(msg.pose.x)
     
+    
+
     rcvd_pose_x = msg.pose.pose.position.x
     rcvd_pose_y = msg.pose.pose.position.y
+    rcvd_pose_theta = Utils.quaternion_to_angle(msg.pose.pose.orientation) 
+
+    map_img_temp, map_info_temp =Utils.get_map(MAP_TOPIC) 
+
+    map_pose = Utils.world_to_map((rcvd_pose_x, rcvd_pose_y, rcvd_pose_theta), map_info_temp)
 
     rospy.loginfo("This is the actual X position")
     rospy.loginfo(rcvd_pose_x)
@@ -193,14 +201,21 @@ class ParticleFilter():
     rospy.loginfo(rcvd_pose_y)
 
     for i in range(len(self.particles)):
+        rospy.loginfo("This is the beginning of the for loop")
         in_bounds = 0
         w = 0
         h = 0
         while not in_bounds:
-            w = int (np.random.normal(rcvd_pose_x, 1) )# good std deviation?
-            h = int (np.random.normal(rcvd_pose_y, 1) ) # good std deviation?
+            rospy.loginfo("This is if the position is not in bounds") 
+            rospy.loginfo(map_pose[0]) 
+            rospy.loginfo(map_pose[1]) 
+
+            w = int (np.random.normal(map_pose[0], 1) )# good std deviation?
+            h = int (np.random.normal(map_pose[1], 1) ) # good std deviation?
             in_bounds = self.permissible_region[w][h]
-        self.particles[i] = [w,h,0]
+        self.particles[i] = [w,h,map_pose[2]]
+        rospy.loginfo("This is the beginning of the for loop")
+
     Utils.map_to_world(self.particles,self.map_info)
     self.weights[:] = [1 / float(len(self.particles))]
     self.state_lock.release()
