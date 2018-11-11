@@ -205,8 +205,8 @@ class ParticleFilter():
       y_samp = 0
       while not in_bounds:
         # rospy.loginfo("This is if the position is not in bounds") 
-        x_samp = int (np.random.normal(map_pose[:,0], 1) )# good std deviation?
-        y_samp = int (np.random.normal(map_pose[:,1], 1) ) # good std deviation?
+        x_samp = int (np.random.normal(map_pose[:,0], .01) )# good std deviation?
+        y_samp = int (np.random.normal(map_pose[:,1], .01) ) # good std deviation?
         in_bounds = self.permissible_region[y_samp][x_samp]
         # rospy.loginfo(x_samp) 
         # rospy.loginfo(y_samp)
