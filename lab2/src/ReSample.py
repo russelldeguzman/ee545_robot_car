@@ -1,9 +1,15 @@
 #!/usr/bin/env python
 
-import rospy
-import numpy as np
-from threading import Lock
+from __future__ import division
+
 import random
+from threading import Lock
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+import rospy
+
 
 '''
   Provides methods for re-sampling from a distribution represented by weighted samples

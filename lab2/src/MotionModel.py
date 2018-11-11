@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 
-import rospy
-import numpy as np
-import utils as Utils
-from std_msgs.msg import Float64
+from __future__ import division
+
 from threading import Lock
-from nav_msgs.msg import Odometry
-from vesc_msgs.msg import VescStateStamped
+
 import matplotlib.pyplot as plt
+import numpy as np
+
+import rospy
+import utils as Utils
+from nav_msgs.msg import Odometry
+from std_msgs.msg import Float64
+from vesc_msgs.msg import VescStateStamped
 
 # YOUR CODE HERE (Set these values and use them in motion_cb)
 

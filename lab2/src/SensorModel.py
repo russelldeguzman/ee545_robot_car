@@ -1,16 +1,20 @@
 #!/usr/bin/env python
 
-import numpy as np
-import rospy
-import range_libc
+from __future__ import division
+
+import math
 import time
 from threading import Lock
-from nav_msgs.srv import GetMap
-import rosbag
+
 import matplotlib.pyplot as plt
+import numpy as np
+import range_libc
+
+import rosbag
+import rospy
 import utils as Utils
+from nav_msgs.srv import GetMap
 from sensor_msgs.msg import LaserScan
-import math
 
 THETA_DISCRETIZATION = 112 # Discretization of scanning angle
 INV_SQUASH_FACTOR = 0.2    # Factor for helping the weight distribution to be less peaked
@@ -226,9 +230,9 @@ if __name__ == '__main__':
   angle_step = 25
   particles = np.zeros((angle_step * permissible_x.shape[0],3))
   for i in xrange(angle_step):
-    particles[i*(particles.shape[0]/angle_step):(i+1)*(particles.shape[0]/angle_step),0] = permissible_y[:]
-    particles[i*(particles.shape[0]/angle_step):(i+1)*(particles.shape[0]/angle_step),1] = permissible_x[:]
-    particles[i*(particles.shape[0]/angle_step):(i+1)*(particles.shape[0]/angle_step),2] = i*(2*np.pi / angle_step)
+    particles[i*(particles.shape[0]//angle_step):(i+1)*(particles.shape[0]//angle_step),0] = permissible_y[:]
+    particles[i*(particles.shape[0]//angle_step):(i+1)*(particles.shape[0]//angle_step),1] = permissible_x[:]
+    particles[i*(particles.shape[0]//angle_step):(i+1)*(particles.shape[0]//angle_step),2] = i*(2*np.pi / angle_step)
   
   Utils.map_to_world(particles, map_info)
   weights = np.ones(particles.shape[0]) / float(particles.shape[0])
@@ -278,4 +282,3 @@ if __name__ == '__main__':
     img[permissible_y[i],permissible_x[i]] = weights[i]
   plt.imshow(img)
   plt.show()
-  
