@@ -179,19 +179,28 @@ class ParticleFilter():
     # Updates the particles in place
     # Updates the weights to all be equal, and sum to one
     # YOUR CODE HERE
-    rospy.loginfo("this is the msg.pose.position")
-    rospy.loginfo()
-    rcvd_pose.x = msg.pose.x
-    rcvd_pose.y = msg.pose.y
+    # rospy.loginfo("this is the msg.pose.position")
+    # rospy.loginfo(msg.pose.x)
+    # rospy.loginfo(msg.pose.x)
+    
+    rcvd_pose_x = msg.pose.pose.position.x
+    rcvd_pose_y = msg.pose.pose.position.y
+
+    rospy.loginfo("This is the actual X position")
+    rospy.loginfo(rcvd_pose_x)
+
+    rospy.loginfo("This is the actual Y position")
+    rospy.loginfo(rcvd_pose_y)
+
     for i in range(len(self.particles)):
         in_bounds = 0
         w = 0
         h = 0
         while not in_bounds:
-            w = np.random.normal(rcvd_pose.x, 5) # good std deviation?
-            h = np.random.normal(rcvd_pose.y, 5) # good std deviation?
+            w = int (np.random.normal(rcvd_pose_x, 1) )# good std deviation?
+            h = int (np.random.normal(rcvd_pose_y, 1) ) # good std deviation?
             in_bounds = self.permissible_region[w][h]
-        self.particles[i] = Utils.point([w,h])
+        self.particles[i] = [w,h,0]
     Utils.map_to_world(self.particles,self.map_info)
     self.weights[:] = [1 / float(len(self.particles))]
     self.state_lock.release()

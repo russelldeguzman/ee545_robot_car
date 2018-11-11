@@ -37,7 +37,6 @@ class ReSampler:
   def resample_naiive(self):
     self.state_lock.acquire()
     # YOUR CODE HERE
-    self.prev_particles = self.particles
     chosen_idxs = [int(np.random.choice(self.particle_idxs, 1, p=self.weights)) for i in range(len(self.particles))]
     self.particles[:] = [self.prev_particles[chosen_idxs[i]] for i in range(len(self.prev_particles))]
     self.state_lock.release()

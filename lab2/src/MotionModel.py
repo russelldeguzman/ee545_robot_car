@@ -125,30 +125,33 @@ class KinematicMotionModel:
     deltaT = deltaTDuration.to_sec()
     beta = np.arctan(np.tan(noisy_delta_array)/2)
     KM_theta = noisy_speed_array/self.CAR_LENGTH*np.sin(2*beta)*deltaT
+
+    # KM_theta =  np.remainder( (KM_theta_2pi + np.full((len(KM_theta_2pi),1), np.pi)), np.full((len(KM_theta_2pi),1), 2*np.pi) ) - np.full((len(KM_theta_2pi),1), np.pi)
+
     KM_X = self.CAR_LENGTH/np.sin(2*beta)*(np.sin(KM_theta)-np.sin(self.particles[:,2]))
     KM_Y = self.CAR_LENGTH/np.sin(2*beta)*(-np.cos(KM_theta)+np.cos(self.particles[:,2]))
 
-    rospy.loginfo("This is the current speed")
-    rospy.loginfo(curr_speed)
-    rospy.loginfo("This is the current steering angle, delta")
-    rospy.loginfo(curr_delta)
-    rospy.loginfo("This is the average noisy speed")
-    rospy.loginfo(np.mean(noisy_speed_array))
-    rospy.loginfo("This is the average noisy delta")
-    rospy.loginfo(np.mean(noisy_delta_array))
-    rospy.loginfo("This is delta T time step")
-    rospy.loginfo(deltaT)
-    rospy.loginfo("This is the average beta")
-    rospy.loginfo(np.mean(beta))
-    rospy.loginfo("This is the average KM_X")
-    rospy.loginfo(np.mean(KM_X))
-    rospy.loginfo("This is the average KM_X")
-    rospy.loginfo(np.mean(KM_X))
-    rospy.loginfo("This is the average KM_Y")
-    rospy.loginfo(np.mean(KM_Y))
-    rospy.loginfo("This is the average KM_theta")
-    rospy.loginfo(np.mean(KM_theta))
-    rospy.loginfo("\n")
+    # rospy.loginfo("This is the current speed")
+    # rospy.loginfo(curr_speed)
+    # rospy.loginfo("This is the current steering angle, delta")
+    # rospy.loginfo(curr_delta)
+    # rospy.loginfo("This is the average noisy speed")
+    # rospy.loginfo(np.mean(noisy_speed_array))
+    # rospy.loginfo("This is the average noisy delta")
+    # rospy.loginfo(np.mean(noisy_delta_array))
+    # rospy.loginfo("This is delta T time step")
+    # rospy.loginfo(deltaT)
+    # rospy.loginfo("This is the average beta")
+    # rospy.loginfo(np.mean(beta))
+    # rospy.loginfo("This is the average KM_X")
+    # rospy.loginfo(np.mean(KM_X))
+    # rospy.loginfo("This is the average KM_X")
+    # rospy.loginfo(np.mean(KM_X))
+    # rospy.loginfo("This is the average KM_Y")
+    # rospy.loginfo(np.mean(KM_Y))
+    # rospy.loginfo("This is the average KM_theta")
+    # rospy.loginfo(np.mean(KM_theta))
+    # rospy.loginfo("\n")
 
 
     #Propogate the model forward and add noise
@@ -156,6 +159,14 @@ class KinematicMotionModel:
     self.particles[:,1] = self.particles[:,1] + KM_Y + noisy_KM_y
     self.particles[:,2] = self.particles[:,2] + KM_theta + noisy_KM_theta
 
+    rospy.loginfo("This is the average X position of particles")
+    rospy.loginfo(np.mean(self.particles[:,0]))
+    rospy.loginfo("This is the average Y position of particles")
+    rospy.loginfo(np.mean(self.particles[:,1]))
+    rospy.loginfo("This is the average Theta position of particles")
+    rospy.loginfo(np.mean(self.particles[:,2]))
+    rospy.loginfo("\n")
+  
     self.last_vesc_stamp = msg.header.stamp
     self.state_lock.release()
 
