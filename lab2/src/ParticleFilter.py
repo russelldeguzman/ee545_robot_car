@@ -183,22 +183,15 @@ class ParticleFilter():
     # rospy.loginfo("this is the msg.pose.position")
     # rospy.loginfo(msg.pose.x)
     # rospy.loginfo(msg.pose.x)
-    
-    
 
     rcvd_pose_x = msg.pose.pose.position.x
     rcvd_pose_y = msg.pose.pose.position.y
     rcvd_pose_theta = Utils.quaternion_to_angle(msg.pose.pose.orientation) 
 
-    map_img_temp, map_info_temp =Utils.get_map(MAP_TOPIC) 
+    # map_img_temp, map_info_temp =Utils.get_map(MAP_TOPIC) 
 
-    map_pose = Utils.world_to_map((rcvd_pose_x, rcvd_pose_y, rcvd_pose_theta), map_info_temp)
-
-    rospy.loginfo("This is the actual X position")
-    rospy.loginfo(rcvd_pose_x)
-
-    rospy.loginfo("This is the actual Y position")
-    rospy.loginfo(rcvd_pose_y)
+    map_pose = np.array((rcvd_pose_x, rcvd_pose_y, rcvd_pose_theta), ndmin = 2 )
+    Utils.world_to_map(map_pose, self.map_info)
 
     for i in range(len(self.particles)):
         rospy.loginfo("This is the beginning of the for loop")
@@ -207,13 +200,14 @@ class ParticleFilter():
         h = 0
         while not in_bounds:
             rospy.loginfo("This is if the position is not in bounds") 
-            rospy.loginfo(map_pose[0]) 
-            rospy.loginfo(map_pose[1]) 
-
-            w = int (np.random.normal(map_pose[0], 1) )# good std deviation?
-            h = int (np.random.normal(map_pose[1], 1) ) # good std deviation?
+            w = int (np.random.normal(map_pose[:,0], 5) )# good std deviation?
+            h = int (np.random.normal(map_pose[:,1], 5) ) # good std deviation?
             in_bounds = self.permissible_region[w][h]
-        self.particles[i] = [w,h,map_pose[2]]
+            rospy.loginfo(w) 
+            rospy.loginfo(h)
+            rospy.loginfo(in_bounds)
+
+        self.particles[i] = [w,h,map_pose[:,2]]
         rospy.loginfo("This is the beginning of the for loop")
 
     Utils.map_to_world(self.particles,self.map_info)
