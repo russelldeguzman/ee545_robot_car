@@ -103,7 +103,7 @@ class SensorModel:
 
 
     self.apply_sensor_model(self.particles, obs, self.weights)
-    self.weights /= np.sum(self.weights)
+    self.weights[:] /= np.sum(self.weights)  # Don't know if this line is necessary after calling apply_sensor_model(), but changed so that it won't break the reference to self.weights
     
     self.last_laser = msg
     self.do_resample = True
