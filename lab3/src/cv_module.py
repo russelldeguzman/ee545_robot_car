@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import cv2 
+import cv2
 import time
 import sys
 import rospy
@@ -15,7 +15,7 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from cv_bridge import CvBridge, CvBridgeError
 
 
-IMAGE_TOPIC = '/camera/color/image_raw' 
+IMAGE_TOPIC = '/camera/color/image_raw'
 CMD_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' # The topic to publish controls to
 IMGPUB_TOPIC = '/cv_module/image_op'
 
@@ -34,7 +34,7 @@ def apply_threshold(matrix, low_value, high_value):
     return matrix
 
 def simplest_cb(img, percent):
-    
+
     assert img.shape[2] == 3
 
     assert percent > 0 and percent < 100
@@ -79,11 +79,14 @@ def simplest_cb(img, percent):
 
 class RBFilter:
 
-    def __init__(self, ):
+    def __init__(self, min_angle, max_angle, angle_incr):
 
         # Storing Params if needed
+        self.min_angle = min_angle
+        self.max_angle = max_angle
+        self.angle_incr = angle_incr
+        self.angles = np.arange(min_delta, max_delta, delta_incr)
 
-        
         self.bridge = CvBridge()
         #Publisher, Subscribers
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
@@ -91,7 +94,7 @@ class RBFilter:
 
     def is_object_present(self, mask, threshold):
         _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        
+
         if len(contours ) == 0:
             return False, 0, 0
 
@@ -104,7 +107,6 @@ class RBFilter:
             return True, cX, cY
 
         return False, 0, 0
-        
 
     def area_check(self, rgb_img):
 
@@ -125,7 +127,7 @@ class RBFilter:
         square_area_threshold = 3000
 
         is_red_square_present, x, y = self.is_object_present(mask_red, square_area_threshold)
-        
+
         cv2.circle(rgb_img, (x, y), 7, (255, 255, 255), -1)
 
         is_blue_square_present, x, y = self.is_object_present(mask_blue, square_area_threshold)
@@ -133,19 +135,31 @@ class RBFilter:
         cv2.circle(rgb_img, (x, y), 7, (255, 255, 255), -1)
 
         #Now order of precedence would be for red over blue
-        
+
         # if is_blue_square_present and is_red_square_present:
         #     print "Both Blue and red present"
-            
+
         if is_blue_square_present:
             print "Blue present"
 
         if is_red_square_present:
-            print "Red present"             
+            print "Red present"
 
         # cv2.imshow("HSV Image", hsv)
         # cv2.imshow("BGR8 Image", rgb_img)
-    
+
+    def calc_turn_angle ( self, x, y, img_width, turn_towards ):
+        turn_angle = 0
+        center = int(img_width / 2)
+        pixels_per_bin = img_width / len(self.angles)
+        if turn_towards: # we're trying to head towards a blue square
+            turn_angle = self.angles[int( x / pixels_per_bin )]
+        else: # We need to get away from a red square
+            if x < center: # red to the left
+                turn_angle = self.angles[len(self.angles) - 1] # we want to turn to the right ASAP
+            else: # red to the right
+                turn_angle = self.angles[0] # we want to turn to the left ASAP
+        return turn_angle
 
     def image_cb(self,data):
         # print('callback')
@@ -155,7 +169,7 @@ class RBFilter:
             print(e)
 
         cv_image = simplest_cb(cv_image, 7)
-        
+
         self.area_check(cv_image)
 
         cv2.imshow("BGR8 Image", cv_image)
@@ -169,10 +183,13 @@ class RBFilter:
 
 
 def main():
+    rospy.init_node('cv_module', anonymous=True)
 
-    rospy.init_node('cv_module', anonymous=True) 
-    
-    im_filter = RBFilter()
+    min_angle = rospy.get_param('~min_angle')# Default val: -0.34
+    max_angle = rospy.get_param('~max_angle')# Default val: 0.341
+    angle_incr = rospy.get_param('~angle_incr')# Starting val: 0.34/3 (consider changing the denominator)
+    angle_incr /= 3
+    im_filter = RBFilter(min_delta, max_delta, delta_incr)
 
     try:
         rospy.spin()
@@ -185,8 +202,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
-

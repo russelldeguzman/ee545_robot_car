@@ -1,0 +1,9 @@
+<launch>
+
+	<node pkg="lab3" type="cv_module.py" name="cv_module" output="screen" >
+    <param name = 'min_angle' type = 'double' value='-0.34'/>
+    <param name = 'max_angle' type = 'double' value='0.341'/>
+    <param name = 'angle_incr' type = 'double' value='0.34'/>
+	</node>
+
+</launch>
