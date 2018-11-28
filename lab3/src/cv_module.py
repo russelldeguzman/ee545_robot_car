@@ -110,29 +110,70 @@ class RBFilter:
 
         return False, 0, 0
 
+    def hsv_thresh(self, hsv_samp, tol=[5, 25, 25]):
+        # Define HSV Parameter bounds for CV2
+        CV_MAX_HSV = [180, 255, 255]
+        CV_MIN_HSV = [0, 0, 0]
+
+        HUE_SHIFT = tol[0] + 1
+        # HUE_SHIFT = 0
+        # Convert PS HSV form [0-360, 0-100, 0-100] to CV2 form [0-180, 0-255, 0-255]
+        hsv_cv = np.zeros_like(hsv_samp)
+        hsv_cv[0] = int(round(hsv_samp[0]/2)) - HUE_SHIFT
+        hsv_cv[1] = int(round((hsv_samp[1]/100.0)*255))
+        hsv_cv[2] = int(round((hsv_samp[2]/100.0)*255))
+
+        lower_hsv = np.array(np.maximum(CV_MIN_HSV, hsv_cv - tol), dtype=int)
+        # lower_hsv = np.array([0, int(round(0.2*255)), int(round(0.95*255))], dtype=int)
+        upper_hsv = np.array(np.minimum(CV_MAX_HSV, hsv_cv + tol), dtype=int)
+        # upper_hsv = np.array([5, int(round(0.8*255)), 255], dtype=int)
+
+        # This is a hacky way of getting around the max red hue value wrapping around 0
+        hue_shift_img = self.hsv_img.copy()
+        hue_shift_img[:,:,0] -= HUE_SHIFT
+        hue_shift_img = np.array(np.where(hue_shift_img < 0, 180 + hue_shift_img, hue_shift_img), dtype=int)
+        hsv_mask = cv2.inRange(hue_shift_img, lower_hsv, upper_hsv)
+
+        return hsv_mask
+
     def area_check(self, rgb_img):
+        blue_samp = np.mean([[208, 90, 90], [208, 70, 88], [207,100,96], [204,73,100]], axis=0)  # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
+        red_samp = np.mean([[355, 40, 100], [355, 35, 100], [338, 25, 100], [356,58,100]], axis=0) # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
+        # red_rollover =[2, 28,100]
+        # BLUE_H_MID = blue_samp[0]/2
+        # RED_H_MID = red_samp[0]/2
 
-        lower_blue = np.array([100,50,50])
-        upper_blue = np.array([140,255,255])
+        BLUE_TOL = [10, 50, 20]   # Blue hue tolerance
+        RED_TOL = [10, 50, 20]  # Red hue tolerance
 
-        lower_red = np.array([90 - 10, 70, 50])
-        upper_red = np.array([90 + 10, 255, 255])
 
-        hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
+        # lower_blue = np.array([BLUE_H_MID - BLUE_TOL,240,240])
+        # upper_blue = np.array([BLUE_H_MID + BLUE_TOL,255,255])
 
-        mask_red = cv2.inRange(hsv, lower_red, upper_red)
-        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+        # lower_red = np.array([RED_H_MID - RED_TOL/2, 150, 70])
+        # upper_red = np.array([RED_H_MID + RED_TOL/2, 250, 255])
 
-        # cv2.imshow("blue_mask", mask_blue)
+        self.hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
+
+        # mask_red = cv2.inRange(hsv, lower_red, upper_red)
+        # mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        self.mask_red = self.hsv_thresh(red_samp, RED_TOL)
+        self.mask_blue = self.hsv_thresh(blue_samp, BLUE_TOL)
+
+        cv2.imshow("blue_mask", self.mask_blue)
+        cv2.imshow("red_mask", self.mask_red)
 
         # Adjust threshold based on output
-        square_area_threshold = 3000
+        square_area_threshold = 50
+        # TODO - it might be better if we adjust this threshold dynamically based on either depth info from the RealSense or our best guess as to distance-to-target based on ParticleFilter
+        # Dead simple version - do it as a function of the centroid height?
 
-        is_red_square_present, x, y = self.is_object_present(mask_red, square_area_threshold)
+        is_red_square_present, x, y = self.is_object_present(self.mask_red, square_area_threshold)
 
         cv2.circle(rgb_img, (x, y), 7, (255, 255, 255), -1)
 
-        is_blue_square_present, x, y = self.is_object_present(mask_blue, square_area_threshold)
+        is_blue_square_present, x, y = self.is_object_present(self.mask_blue, square_area_threshold)
 
         cv2.circle(rgb_img, (x, y), 7, (255, 255, 255), -1)
 
@@ -141,11 +182,11 @@ class RBFilter:
         # if is_blue_square_present and is_red_square_present:
         #     print "Both Blue and red present"
 
-        if is_blue_square_present:
-            print "Blue present"
+        # if is_blue_square_present:
+        #     print "Blue present"
 
-        if is_red_square_present:
-            print "Red present"
+        # if is_red_square_present:
+        #     print "Red present"
 
         # cv2.imshow("HSV Image", hsv)
         # cv2.imshow("BGR8 Image", rgb_img)
