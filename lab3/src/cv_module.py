@@ -38,14 +38,13 @@ def simplest_cb(img, percent):
     assert img.shape[2] == 3
 
     assert percent > 0 and percent < 100
-    global once
 
     half_percent = percent / 200.0
 
     channels = cv2.split(img)
 
     out_channels = []
-    for channel in channels:
+    for i, channel in enumerate(channels):
         assert len(channel.shape) == 2
         # find the low and high precentile values (based on the input percentile)
         height, width = channel.shape
@@ -58,10 +57,9 @@ def simplest_cb(img, percent):
 
         n_cols = flat.shape[0]
 
-        if once == True:
+        if i == 0:
             low_val  = flat[int(math.floor(n_cols * half_percent))]
             high_val = flat[int(math.ceil( n_cols * (1.0 - half_percent)))]
-            once = False
 
         # print "Lowval: ", low_val
         # print "Highval: ", high_val
@@ -85,12 +83,16 @@ class RBFilter:
         self.min_angle = min_angle
         self.max_angle = max_angle
         self.angle_incr = angle_incr
-        self.angles = np.arange(min_delta, max_delta, delta_incr)
+        self.angles = np.arange(min_angle, max_angle, angle_incr)
 
         self.bridge = CvBridge()
         #Publisher, Subscribers
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
+
+        self.hsv_img = None
+        self.mask_red = None
+        self.mask_blue = None
 
     def is_object_present(self, mask, threshold):
         _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -189,7 +191,7 @@ def main():
     max_angle = rospy.get_param('~max_angle')# Default val: 0.341
     angle_incr = rospy.get_param('~angle_incr')# Starting val: 0.34/3 (consider changing the denominator)
     angle_incr /= 3
-    im_filter = RBFilter(min_delta, max_delta, delta_incr)
+    im_filter = RBFilter(min_angle, max_angle, angle_incr)
 
     try:
         rospy.spin()
