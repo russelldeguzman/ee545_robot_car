@@ -140,24 +140,11 @@ class RBFilter:
         blue_samp = np.mean([[208, 90, 90], [208, 70, 88], [207,100,96], [204,73,100]], axis=0)  # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
         red_samp = np.mean([[355, 40, 100], [355, 35, 100], [338, 25, 100], [356,58,100]], axis=0) # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
         # red_rollover =[2, 28,100]
-        # BLUE_H_MID = blue_samp[0]/2
-        # RED_H_MID = red_samp[0]/2
 
-        BLUE_TOL = [10, 50, 20]   # Blue hue tolerance
-        RED_TOL = [10, 50, 20]  # Red hue tolerance
-
-
-        # lower_blue = np.array([BLUE_H_MID - BLUE_TOL,240,240])
-        # upper_blue = np.array([BLUE_H_MID + BLUE_TOL,255,255])
-
-        # lower_red = np.array([RED_H_MID - RED_TOL/2, 150, 70])
-        # upper_red = np.array([RED_H_MID + RED_TOL/2, 250, 255])
+        # BLUE_TOL = [10, 50, 20]   # Blue hue tolerance
+        # RED_TOL = [10, 50, 20]  # Red hue tolerance
 
         self.hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
-
-        # mask_red = cv2.inRange(hsv, lower_red, upper_red)
-        # mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
-
         self.mask_red = self.hsv_thresh(red_samp, RED_TOL)
         self.mask_blue = self.hsv_thresh(blue_samp, BLUE_TOL)
 
