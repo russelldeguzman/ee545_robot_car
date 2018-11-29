@@ -19,77 +19,21 @@ IMAGE_TOPIC = '/camera/color/image_raw'
 CMD_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' # The topic to publish controls to
 IMGPUB_TOPIC = '/cv_module/image_op'
 
-once = True
-def apply_mask(matrix, mask, fill_value):
-    masked = np.ma.array(matrix, mask=mask, fill_value=fill_value)
-    return masked.filled()
-
-def apply_threshold(matrix, low_value, high_value):
-    low_mask = matrix < low_value
-    matrix = apply_mask(matrix, low_mask, low_value)
-
-    high_mask = matrix > high_value
-    matrix = apply_mask(matrix, high_mask, high_value)
-
-    return matrix
-
-def simplest_cb(img, percent):
-
-    assert img.shape[2] == 3
-
-    assert percent > 0 and percent < 100
-
-    half_percent = percent / 200.0
-
-    channels = cv2.split(img)
-
-    out_channels = []
-    for i, channel in enumerate(channels):
-        assert len(channel.shape) == 2
-        # find the low and high precentile values (based on the input percentile)
-        height, width = channel.shape
-        vec_size = width * height
-        flat = channel.reshape(vec_size)
-
-        assert len(flat.shape) == 1
-
-        flat = np.sort(flat)
-
-        n_cols = flat.shape[0]
-
-        if i == 0:
-            low_val  = flat[int(math.floor(n_cols * half_percent))]
-            high_val = flat[int(math.ceil( n_cols * (1.0 - half_percent)))]
-
-        # print "Lowval: ", low_val
-        # print "Highval: ", high_val
-
-        # saturate below the low percentile and above the high percentile
-        thresholded = apply_threshold(channel, low_val, high_val)
-        # scale the channel
-        normalized = cv2.normalize(thresholded, thresholded.copy(), 0, 255, cv2.NORM_MINMAX)
-        out_channels.append(normalized)
-
-    return cv2.merge(out_channels)
-
-
-
-
 class RBFilter:
 
-    def __init__(self, min_angle, max_angle, angle_incr):
+    def __init__(self, min_angle, max_angle, angle_incr, speed):
 
         # Storing Params if needed
         self.min_angle = min_angle
         self.max_angle = max_angle
         self.angle_incr = angle_incr
         self.angles = np.arange(min_angle, max_angle, angle_incr)
-
+        self.speed = speed
         self.bridge = CvBridge()
         #Publisher, Subscribers
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
-
+        self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size= 5)
         self.hsv_img = None
         self.mask_red = None
         self.mask_blue = None
@@ -145,40 +89,46 @@ class RBFilter:
         # RED_TOL = [10, 50, 20]  # Red hue tolerance
 
         self.hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
-        self.mask_red = self.hsv_thresh(red_samp, RED_TOL)
-        self.mask_blue = self.hsv_thresh(blue_samp, BLUE_TOL)
-
+        self.mask_red = self.hsv_thresh(red_samp)
+        self.mask_blue = self.hsv_thresh(blue_samp)
+        drive_msg = AckermannDriveStamped()
         cv2.imshow("blue_mask", self.mask_blue)
         cv2.imshow("red_mask", self.mask_red)
 
         # Adjust threshold based on output
-        square_area_threshold = 50
+        square_area_threshold = 100
         # TODO - it might be better if we adjust this threshold dynamically based on either depth info from the RealSense or our best guess as to distance-to-target based on ParticleFilter
         # Dead simple version - do it as a function of the centroid height?
 
-        is_red_square_present, x, y = self.is_object_present(self.mask_red, square_area_threshold)
+        is_red_square_present, red_x, red_y = self.is_object_present(self.mask_red, square_area_threshold)
+        cv2.circle(rgb_img, (red_x, red_y), 7, (255, 255, 255), -1)
 
-        cv2.circle(rgb_img, (x, y), 7, (255, 255, 255), -1)
-
-        is_blue_square_present, x, y = self.is_object_present(self.mask_blue, square_area_threshold)
-
-        cv2.circle(rgb_img, (x, y), 7, (255, 255, 255), -1)
+        is_blue_square_present, blue_x, blue_y = self.is_object_present(self.mask_blue, square_area_threshold)
+        cv2.circle(rgb_img, (blue_x, blue_y), 7, (255, 255, 255), -1)
 
         #Now order of precedence would be for red over blue
 
         # if is_blue_square_present and is_red_square_present:
         #     print "Both Blue and red present"
 
-        # if is_blue_square_present:
-        #     print "Blue present"
+        if is_blue_square_present:
+            turn_angle = self.calc_turn_angle(blue_x, blue_y, rgb_img.shape[1], True)
+            print "Blue present turn - ", turn_angle
+            drive_msg.header.stamp = rospy.Time.now()
+            drive_msg.header.frame_id = '/map'
+            drive_msg.drive.steering_angle = turn_angle
+            drive_msg.drive.speed = self.speed
+            self.cmd_pub.publish(drive_msg)
 
-        # if is_red_square_present:
-        #     print "Red present"
+        if is_red_square_present:
+            turn_angle = self.calc_turn_angle(red_x, red_y, rgb_img.shape[1], False)           
+            print "Red present turn - ", turn_angle
 
         # cv2.imshow("HSV Image", hsv)
         # cv2.imshow("BGR8 Image", rgb_img)
 
     def calc_turn_angle ( self, x, y, img_width, turn_towards ):
+        #dimensions of the rgb image and hsv image are same.
         turn_angle = 0
         center = int(img_width / 2)
         pixels_per_bin = img_width / len(self.angles)
@@ -198,12 +148,9 @@ class RBFilter:
         except CvBridgeError as e:
             print(e)
 
-        cv_image = simplest_cb(cv_image, 7)
-
         self.area_check(cv_image)
 
         cv2.imshow("BGR8 Image", cv_image)
-
         cv2.waitKey(3)
 
         try:
@@ -214,12 +161,12 @@ class RBFilter:
 
 def main():
     rospy.init_node('cv_module', anonymous=True)
-
+    speed = rospy.get_param('~speed')#default val:1
     min_angle = rospy.get_param('~min_angle')# Default val: -0.34
     max_angle = rospy.get_param('~max_angle')# Default val: 0.341
     angle_incr = rospy.get_param('~angle_incr')# Starting val: 0.34/3 (consider changing the denominator)
     angle_incr /= 3
-    im_filter = RBFilter(min_angle, max_angle, angle_incr)
+    im_filter = RBFilter(min_angle, max_angle, angle_incr, speed)
 
     try:
         rospy.spin()
