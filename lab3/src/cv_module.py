@@ -85,12 +85,12 @@ class RBFilter:
         red_samp = np.mean([[355, 40, 100], [355, 35, 100], [338, 25, 100], [356,58,100]], axis=0) # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
         # red_rollover =[2, 28,100]
 
-        # BLUE_TOL = [10, 50, 20]   # Blue hue tolerance
-        # RED_TOL = [10, 50, 20]  # Red hue tolerance
+        BLUE_TOL = [10, 50, 20]   # Blue hue tolerance
+        RED_TOL = [10, 50, 20]  # Red hue tolerance
 
         self.hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
-        self.mask_red = self.hsv_thresh(red_samp)
-        self.mask_blue = self.hsv_thresh(blue_samp)
+        self.mask_red = self.hsv_thresh(red_samp, RED_TOL)
+        self.mask_blue = self.hsv_thresh(blue_samp, BLUE_TOL)
         drive_msg = AckermannDriveStamped()
         cv2.imshow("blue_mask", self.mask_blue)
         cv2.imshow("red_mask", self.mask_red)
