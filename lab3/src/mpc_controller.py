@@ -18,6 +18,8 @@ POSE_TOPIC = '/inferred_pose' # The topic to subscribe to for current pose of th
 VIZ_TOPIC = '/mpc_controller/rollouts' # The topic to publish to for vizualizing
                                        # the computed rollouts. Publish a PoseArray.
 
+PLAN_SUB_TOPIC = "/planner_node/full_car_plan"
+
 MAX_PENALTY = 10000 # The penalty to apply when a configuration in a rollout
                     # goes beyond the corresponding laser scan
 
@@ -49,27 +51,25 @@ class MPCController:
     self.laser_window = laser_window
     self.delta_incr = delta_incr
     self.prev_angle = None
-    self.plan = self.create_plan()
+    self.plan = None
     # YOUR CODE HERE
     self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 1)
     self.laser_sub = rospy.Subscriber(SCAN_TOPIC, LaserScan, self.wander_cb)
     self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 1) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
     self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.vizsub_cb) # Create a subscriber to the current position of the car
+    self.plan_sub = rospy.Subscriber(PLAN_SUB_TOPIC, PoseArray, self.plan_cb)
+
     # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
 
-#TODO: get's the path from a path planning algorithm
-#FIXME: does this want to live inside the class?
-  def create_plan():
-    #What's the best way to structure this?
-    #@Bryan?
-    #Should return a PoseArray
-    pass
-
-#FIXME: Does this want to live inside the class?
+  def plan_cb(self, msg):
+      #is this the entire plan? Does this get updated once we've achieved our objective?
+      self.plan = msg
 # This should always return the current goal we're navigating to
 # it should only update once we've achieved that goal
-  def get_next_pose(pose_plan):
-    return pose_plan.pop[0] #subject to change
+  def get_next_pose(self, pose_plan):
+    if self.plan != None:
+        return pose_plan.pop[0] #subject to change
+    return None
 
   '''
   Vizualize the rollouts. Transforms the rollouts to be in the frame of the world.
@@ -132,7 +132,10 @@ class MPCController:
     # YOUR CODE HERE
 
     #intialize the cost to be the euclid distance from the objective
-    cost = np.linalg.norm(np.array(plan_pose[:-1]) - np.array(rollout_pose[:-1]))
+    if plan_pose is not None:
+        cost = np.linalg.norm(np.array(plan_pose[:-1]) - np.array(rollout_pose[:-1]))
+    else:
+        cost = np.absolute(delta) #FIXME: Is this the right thing to do?
     current_pose = [0,0,0]
     rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
     rollout_pose_distance = np.linalg.norm(np.array(current_pose[:-1]) - np.array(rollout_pose[:-1]))
