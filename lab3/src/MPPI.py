@@ -1,30 +1,34 @@
 #!/usr/bin/env python
 
-import time
 import sys
-import rospy
-import rosbag
-import numpy as np
-import utils as Utils
+import time
 
+import numpy as np
 import torch
 import torch.utils.data
 from torch.autograd import Variable
 
-from nav_msgs.srv import GetMap
+import rosbag
+import rospy
+import utils as Utils
 from ackermann_msgs.msg import AckermannDriveStamped
-from vesc_msgs.msg import VescStateStamped
+from geometry_msgs.msg import (PointStamped, PoseArray, PoseStamped,
+                               PoseWithCovarianceStamped)
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped, PoseArray, PoseWithCovarianceStamped, PointStamped
+from nav_msgs.srv import GetMap
+from vesc_msgs.msg import VescStateStamped
+
 
 class MPPIController:
 
-  def __init__(self, T, K, sigma=0.5, _lambda=0.5):
+  def __init__(self, T, K, sigma=(0.5 * torch.eye(2)), _lambda=0.5):
     self.SPEED_TO_ERPM_OFFSET = float(rospy.get_param("/vesc/speed_to_erpm_offset", 0.0))
     self.SPEED_TO_ERPM_GAIN   = float(rospy.get_param("/vesc/speed_to_erpm_gain", 4614.0))
     self.STEERING_TO_SERVO_OFFSET = float(rospy.get_param("/vesc/steering_angle_to_servo_offset", 0.5304))
     self.STEERING_TO_SERVO_GAIN   = float(rospy.get_param("/vesc/steering_angle_to_servo_gain", -1.2135))
     self.CAR_LENGTH = 0.33 
+    self.OOB_COST = 100000 # Cost associated with an out-of-bounds pose
+    self.MAX_SPEED = 3 # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
 
     self.last_pose = None
     # MPPI params
@@ -32,9 +36,12 @@ class MPPIController:
     self.K = K # Number of sample rollouts
     self.sigma = sigma
     self._lambda = _lambda
+    self.dt = None
 
     self.goal = None # Lets keep track of the goal pose (world frame) over time
     self.lasttime = None
+
+    self.device = None
 
     # PyTorch / GPU data configuration
     # TODO
@@ -42,11 +49,25 @@ class MPPIController:
     # possible for arrays storing your controls or calculated MPPI costs, etc
     model_name = rospy.get_param("~nn_model", "myneuralnetisbestneuralnet.pt")
     self.model = torch.load(model_name)
-    self.model.cuda() # tell torch to run the network on the GPU
-    self.dtype = torch.cuda.FloatTensor
+    self.dtype = torch.float
+    if torch.cuda.is_available():
+      # Running everything on GPU
+      self.device = torch.device("cuda")
+      self.model.cuda()  # Tell Torch to run model on GPU
+    else:
+      # Running everything on CPU
+      self.device = torch.device("cpu")
+
     print("Loading:", model_name)
     print("Model:\n",self.model)
     print("Torch Datatype:", self.dtype)
+
+    self.rollouts = torch.empty(self.K, self.T + 1, 3, dtype=self.dtype, device=self.device)  # KxTx[x, y, theta]_map
+    self.controls = torch.zeros(self.K, self.T, 2, dtype=self.dtype, device=self.device)  # Tx[delta, speed] array of controls
+    self.nominal_control = torch.zeros(self.T, 2, dtype=self.dtype, device=self.device)
+    self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros(2), self.sigma)
+    self.noise = torch.zeros(Self.T, 2, dtype=self.dtype, device=self.device)
+    self.cost = None
 
     # control outputs
     self.msgid = 0
@@ -96,21 +117,87 @@ class MPPIController:
     print("Current Pose: ", self.last_pose)
     print("SETTING Goal: ", self.goal)
     
-  def running_cost(self, pose, goal, ctrl, noise):
-    # TODO
-    # This cost function drives the behavior of the car. You want to specify a
-    # cost function that penalizes behavior that is bad with high cost, and
-    # encourages good behavior with low cost.
-    # We have split up the cost function for you to a) get the car to the goal
-    # b) avoid driving into walls and c) the MPPI control penalty to stay
-    # smooth
-    # You should feel free to explore other terms to get better or unique
-    # behavior
-    pose_cost = 0.0
-    bounds_check = 0.0
-    ctrl_cost = 0.0
+  # def running_cost(self, pose, goal, ctrl, noise):
+  #   # TODO
+  #   # This cost function drives the behavior of the car. You want to specify a
+  #   # cost function that penalizes behavior that is bad with high cost, and
+  #   # encourages good behavior with low cost.
+  #   # We have split up the cost function for you to a) get the car to the goal
+  #   # b) avoid driving into walls and c) the MPPI control penalty to stay
+  #   # smooth
+  #   # You should feel free to explore other terms to get better or unique
+  #   # behavior
+  #   pose_cost = 0.0
+  #   bounds_check = 0.0
+  #   ctrl_cost = 0.0
 
-    return pose_cost + ctrl_cost + bounds_check
+  #   return pose_cost + ctrl_cost + bounds_check
+
+  def compute_cost(self):
+    pose_cost = torch.zeros(self.K)
+    bounds_cost = torch.zeros(self.K)
+    ctrl_cost = torch.zeros(self.K)
+
+    pose_cost = (self.controls[:,:,1] - self.MAX_SPEED)**2  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
+
+    ctrl_cost = torch.sum(torch.matmul(self.nominal_control, self.sigma) * self.noise, dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
+
+    # Probably need a vectorized way of doing this
+    for k in xrange(self.K):
+      for t in xrange(self.T + 1):
+        x_map = Utils.world_to_map(self.rollouts[k, t, 0].clone())  # Clone required here since world_to_map operates in place
+        y_map = Utils.world_to_map(self.rollouts[k, t, 1].clone())
+        in_bounds = self.permissible_region[y_map][x_map]
+        if not in_bounds:
+          bounds_cost[k] = self.OOB_COST
+
+    self.cost = pose_cost + ctrl_cost + bounds_cost
+
+  def mm_step(self, states, controls):
+    # self.state_lock.acquire()
+    # if self.last_servo_cmd is None:
+    #   self.state_lock.release()
+    #   return
+
+    # if self.last_vesc_stamp is None:
+    #   self.last_vesc_stamp = msg.header.stamp
+    #   self.state_lock.release()
+    #   return
+
+    # #Convert the current speed and delta
+    # curr_speed = (msg.state.speed - self.SPEED_TO_ERPM_OFFSET)/self.SPEED_TO_ERPM_GAIN
+    # curr_delta = (self.last_servo_cmd - self.STEERING_TO_SERVO_OFFSET)/self.STEERING_TO_SERVO_GAIN
+
+    deltas = controls[:, 0]
+    speeds = controls[:, 1]
+    states_next = torch.zeros_like(states)
+
+    #Calculate the Kinematic Model additions
+    beta = torch.arctan(torch.tan(deltas) * 0.5 )
+    KM_theta = speeds/self.CAR_LENGTH*torch.sin(2*beta)*self.dt
+    assert torch.any((KM_theta <= 2*np.pi) | (KM_theta >= 0.0)), "KM_theta is not within the range [0, 2*pi]"
+    
+    KM_X = self.CAR_LENGTH/torch.sin(2*beta)*(torch.sin(states[:,2] + KM_theta)-torch.sin(states[:,2]))
+    KM_Y = self.CAR_LENGTH/torch.sin(2*beta)*(-torch.cos(states[:,2] + KM_theta)+torch.cos(states[:,2]))
+
+    #Propogate the model forward and add noise
+    states_next[:,0] = states[:,0] + KM_X
+    states_next[:,1] = states[:,1] + KM_Y
+    states_next[:,2] = states[:,2] + KM_theta
+
+    return states_next
+    # self.last_vesc_stamp = msg.header.stamp
+    # self.state_lock.release()
+
+  def do_rollouts(self):
+    if not isinstance(self.last_pose, np.ndarray):
+      print("self.last_pose not yet defined!")
+      return
+    else:
+      self.rollouts[:, 0, :] = torch.tensor(self.last_pose)
+
+    for t in xrange(1, self.T):
+      self.rollouts[:, t, :] = self.mm_step(self.rollouts[:, t - 1, :], self.controls[:, t - 1, :])
 
   def mppi(self, init_pose, init_input):
     t0 = time.time()
@@ -137,6 +224,12 @@ class MPPIController:
     # python will slow down the control calculations. You should be able to keep a
     # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
     # between inferred-poses from the particle filter.
+    self.noise = self.noise_dist.rsample((self.K, self.T))  # Generates a (self.T -1)x2 matrix of noise sampled from self.noise_dist
+    self.controls = self.nominal_control + self.noise
+    self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
+    self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
+
+
 
     print("MPPI: %4.5f ms" % ((time.time()-t0)*1000.0))
 
@@ -163,11 +256,11 @@ class MPPIController:
     self.last_pose = curr_pose
 
     timenow = msg.header.stamp.to_sec()
-    dt = timenow - self.lasttime
+    self.dt = timenow - self.lasttime
     self.lasttime = timenow
     nn_input = np.array([pose_dot[0], pose_dot[1], pose_dot[2],
                          np.sin(theta),
-                         np.cos(theta), 0.0, 0.0, dt])
+                         np.cos(theta), 0.0, 0.0, self.dt])
 
     run_ctrl, poses = mppi(curr_pose, nn_input)
 
@@ -223,4 +316,3 @@ if __name__ == '__main__':
   # test & DEBUG
   mp = MPPIController(T, K, sigma, _lambda)
   test_MPPI(mp, 10, np.array([0.,0.,0.])))
-
