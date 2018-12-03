@@ -110,6 +110,13 @@ def describe(var_list):
         callers_local_vars = inspect.currentframe().f_back.f_locals.items()
         return [var_name for var_name, var_val in callers_local_vars if var_val is var]
 
-    for v in var_list:
-        name = retrieve_name(v)
-        print("{} = {}".format(name, v))
+    for i in xrange(len(var_list)):
+        name = retrieve_name(var_list[i])
+        print("{} = {}".format(name, var_list[i]))
+
+# Helper function adapted from: https://stackoverflow.com/questions/9269681/intersection-of-2d-numpy-ndarrays
+def multidim_intersect(arr1, arr2):
+    arr1_view = arr1.view([('',arr1.dtype)] * arr1.shape[1]).ravel()
+    arr2_view = arr2.view([('',arr2.dtype)] * arr2.shape[1]).ravel()
+    intersected = np.intersect1d(arr1_view, arr2_view).view(a.dtype).reshape(-1, a.shape[1])
+    return intersected.view(arr1.dtype).reshape(-1, arr1.shape[1])
