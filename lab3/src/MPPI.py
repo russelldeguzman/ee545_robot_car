@@ -31,14 +31,15 @@ class MPPIController:
     self.STEERING_TO_SERVO_GAIN   = float(rospy.get_param("/vesc/steering_angle_to_servo_gain", -1.2135))
     self.CAR_LENGTH = 0.33 
     self.OOB_COST = 100000 # Cost associated with an out-of-bounds pose
-    self.MAX_SPEED = 3.0 # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
+    self.MAX_SPEED = 1.0 # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
+    self.DIST_COST_GAIN = 2
 
     self.last_pose = None
     # MPPI params
     self.T = T # Length of rollout horizon
     self.K = K # Number of sample rollouts
-    # self.sigma = sigma
-    self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
+    self.sigma = torch.tensor([[0.003, 0.0],[0.0, 5]])
+    # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
     self._lambda = _lambda
     self.dt = None
 
@@ -85,7 +86,7 @@ class MPPIController:
 
     # We will publish control messages and a way to visualize a subset of our
     # rollouts, much like the particle filter
-    self.ctrl_pub = rospy.Publisher(rospy.get_param("~ctrl_topic", "/vesc/high_level/ackermann_cmd_mux/input/nav0"),
+    self.ctrl_pub = rospy.Publisher('/vesc/high_level/ackermann_cmd_mux/input/nav_0',
             AckermannDriveStamped, queue_size=2)
     self.path_pub = rospy.Publisher("/mppi/paths", Path, queue_size = self.num_viz_paths)
 
@@ -148,7 +149,7 @@ class MPPIController:
 
     pose_cost = torch.sum((self.controls[:,:,1] - self.MAX_SPEED)**2, dim=1)  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
-    ctrl_cost = torch.sum(torch.matmul(self.nominal_control, self.sigma) * self.noise, dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
+    ctrl_cost = self._lambda * torch.sum(torch.matmul(self.nominal_control, torch.inverse(self.sigma)) * self.noise, dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
 
     total_in_bounds = 0
     # TODO: Probably need a vectorized way of doing this
@@ -172,9 +173,13 @@ class MPPIController:
 
     assert np.all(np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(pose_cost.shape, ctrl_cost.shape, bounds_cost.shape)
     # describe([pose_cost, ctrl_cost, bounds_cost, dist_cost])
-    for cost, name in zip([pose_cost, ctrl_cost, bounds_cost], ["pose_cost", "ctrl_cost", "bounds_cost"]):
+    print("Costs:")
+    for cost, name in zip([pose_cost, ctrl_cost, bounds_cost, dist_cost], ["pose_cost", "ctrl_cost", "bounds_cost", "dist_cost"]):
       if np.any(np.isnan(cost)):
         assert False, "NaNs in output: {}".format(name)
+
+      print(name)
+      print(cost)
     self.cost = pose_cost + ctrl_cost + bounds_cost + dist_cost
 
   def mm_step(self, states, controls):
@@ -199,9 +204,8 @@ class MPPIController:
     #Calculate the Kinematic Model additions
     beta = torch.atan(torch.tan(deltas) * 0.5 )
     KM_theta = speeds/self.CAR_LENGTH*torch.sin(2*beta)*self.dt
-    # assert torch.any((KM_theta <= 2*np.pi) | (KM_theta >= 0.0)), "KM_theta is not within the range [0, 2*pi]"
     KM_theta = ((KM_theta + np.pi) % (2*np.pi)) - np.pi
-    assert torch.any((KM_theta <= np.pi) | (KM_theta >= -np.pi)), "KM_theta is not within the range [-pi, pi]"
+    # assert torch.any((KM_theta <= np.pi) | (KM_theta >= -np.pi)), "KM_theta = {} (not within the range [-pi, pi])".format(KM_theta)
     KM_X = self.CAR_LENGTH/torch.sin(2*beta)*(torch.sin(states[:,2] + KM_theta)-torch.sin(states[:,2]))
     KM_Y = self.CAR_LENGTH/torch.sin(2*beta)*(-torch.cos(states[:,2] + KM_theta)+torch.cos(states[:,2]))
 
@@ -209,7 +213,7 @@ class MPPIController:
     states_next[:,0] = states[:,0] + KM_X
     states_next[:,1] = states[:,1] + KM_Y
     states_next[:,2] = ((states[:,2] + KM_theta + np.pi) % (2*np.pi)) - np.pi
-    assert torch.any((states_next[:,2] <= np.pi) | (states_next[:,2] >= -np.pi)), "KM_theta is not within the range [-pi, pi]"
+    assert torch.any((states_next[:,2] <= np.pi) | (states_next[:,2] >= -np.pi)), "states_next[:,2] = {} (not within the range [-pi, pi])".format(KM_theta)
 
     return states_next
     # self.last_vesc_stamp = msg.header.stamp
@@ -264,21 +268,15 @@ class MPPIController:
     assert beta > 0, "Minimum cost is not > 0"
     self.cost = self.cost - beta
     self.weights = torch.zeros_like(self.cost)
-    self.weights = torch.exp((-1.0/self._lambda)*(self.cost - beta))
+    self.weights = torch.exp((-1.0/self._lambda)*(self.cost))
     self.weights = self.weights / torch.sum(self.weights)
 
     # Generate the new nominal control
-    test = self.nominal_control.clone()
-    test2 = self.nominal_control.clone()
     for t in xrange(self.T):
-      self.test[t] = torch.test2[t] + torch.sum(self.weights * self.noise[:, t, :], dim=0)
+      self.nominal_control[t] += torch.sum(self.noise[:, t, :] * torch.cat((self.weights.view(self.K, 1), self.weights.view(self.K, 1)), dim=1), dim=0)
 
-    for t in xrange(self.T):
-      self.nominal_control[t] += torch.sum(self.weights * self.noise[:, t, :], dim=0)
-
-    assert np.all_close(test.numpy(), self.nominal_control.numpy())
     run_ctrl = self.nominal_control[0].clone()
-    self.nominal_control = torch.cat((self.nominal_control[1:], self.nominal_control[-1]))  # Rolls the array forward in time, then duplicates the last row to maintain size
+    self.nominal_control = torch.cat((self.nominal_control[1:], self.nominal_control[-1].view(1,2)))  # Rolls the array forward in time, then duplicates the last row to maintain size
 
     print("MPPI: %4.5f ms" % ((time.time()-t0)*1000.0))
 
@@ -323,6 +321,7 @@ class MPPIController:
   def send_controls(self, steer, speed):
     print("Speed:", speed, "Steering:", steer)
     ctrlmsg = AckermannDriveStamped()
+    ctrlmsg.header = Utils.make_header('map')
     ctrlmsg.header.seq = self.msgid
     ctrlmsg.drive.steering_angle = steer 
     ctrlmsg.drive.speed = speed
@@ -334,10 +333,10 @@ class MPPIController:
     print("Running viz")
     if self.path_pub.get_num_connections() > 0:
       frame_id = 'map'
+      pa = Path()
+      pa.header = Utils.make_header(frame_id)
       for i in range(0, self.num_viz_paths):
-        pa = Path()
-        pa.header = Utils.make_header(frame_id)
-        pa.poses = map(Utils.particle_to_posestamped, self.rollouts[i,:,:], [frame_id]*self.T)
+        pa.poses = [Utils.particle_to_posestamped(pose, frame_id) for pose in self.rollouts[i,:,:]]
         self.path_pub.publish(pa)
 
 def test_MPPI(mp, N, goal=np.array([0.,0.,0.])):
@@ -357,10 +356,10 @@ def test_MPPI(mp, N, goal=np.array([0.,0.,0.])):
 if __name__ == '__main__':
   rospy.init_node("mppi", anonymous=True) # Initialize the node
 
-  T = 5
-  K = 10
+  T = 20
+  K = 512
   sigma = 0.05 # These values will need to be tuned
-  _lambda = 0.25
+  _lambda = 1.0
 
   # run with ROS
   #rospy.init_node("mppi_control", anonymous=True) # Initialize the node
