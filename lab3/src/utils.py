@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import inspect
 
 import rospy
 import numpy as np
@@ -103,3 +104,12 @@ def world_to_map(poses, map_info):
     poses[:,1] = s*temp       + c*poses[:,1]
     poses[:,2] += angle
 
+def describe(var_list):
+    # Name code taken from here: https://stackoverflow.com/questions/18425225/getting-the-name-of-a-variable-as-a-string/18425523
+    def retrieve_name(var):
+        callers_local_vars = inspect.currentframe().f_back.f_locals.items()
+        return [var_name for var_name, var_val in callers_local_vars if var_val is var]
+
+    for v in var_list:
+        name = retrieve_name(v)
+        print("{} = {}".format(name, v))

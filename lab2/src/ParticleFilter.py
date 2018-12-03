@@ -162,6 +162,45 @@ class ParticleFilter():
     except (tf.LookupException): # Will occur if odom frame does not exist
       self.pub_tf.sendTransform((pose[0],pose[1],0),tf.transformations.quaternion_from_euler(0,0,pose[2]), stamp , "/laser", "/map")
 
+# """ Publish a tf for the car. This tells ROS where the car is with respect to the map. """
+#     if stamp == None:
+#         stamp = rospy.Time.now()
+
+#     # this may cause issues with the TF tree. If so, see the below code.
+#     self.pub_tf.sendTransform((pose[0],pose[1],0),tf.transformations.quaternion_from_euler(0, 0, pose[2]), 
+#             stamp , "/laser", "/map")
+
+#     # also publish odometry to facilitate getting the localization pose
+#     if self.PUBLISH_ODOM:
+#         odom = Odometry()
+#         odom.header = Utils.make_header("/map", stamp)
+#         odom.pose.pose.position.x = pose[0]
+#         odom.pose.pose.position.y = pose[1]
+#         odom.pose.pose.orientation = Utils.angle_to_quaternion(pose[2])
+#         self.odom_pub.publish(odom)
+    
+#     return # below this line is disabled
+
+    """
+    Our particle filter provides estimates for the "laser" frame
+    since that is where our laser range estimates are measure from. Thus,
+    We want to publish a "map" -> "laser" transform.
+
+    However, the car's position is measured with respect to the "base_link"
+    frame (it is the root of the TF tree). Thus, we should actually define
+    a "map" -> "base_link" transform as to not break the TF tree.
+    """
+
+    # Get map -> laser transform.
+    map_laser_pos = np.array( (pose[0],pose[1],0) )
+    map_laser_rotation = np.array( tf.transformations.quaternion_from_euler(0, 0, pose[2]) )
+    # Apply laser -> base_link transform to map -> laser transform
+    # This gives a map -> base_link transform
+    laser_base_link_offset = (0.265, 0, 0)
+    map_laser_pos -= np.dot(tf.transformations.quaternion_matrix(tf.transformations.unit_vector(map_laser_rotation))[:3,:3], laser_base_link_offset).T
+
+    # Publish transform
+    self.pub_tf.sendTransform(map_laser_pos, map_laser_rotation, stamp , "/base_link", "/map")
   '''
     Returns a 3 element numpy array representing the expected pose given the
     current particles and weights

@@ -11,13 +11,13 @@ from torch.autograd import Variable
 import rosbag
 import rospy
 import utils as Utils
+from utils import describe
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import (PointStamped, PoseArray, PoseStamped,
                                PoseWithCovarianceStamped)
 from nav_msgs.msg import Path
 from nav_msgs.srv import GetMap
 from vesc_msgs.msg import VescStateStamped
-
 
 class MPPIController:
 
@@ -34,7 +34,8 @@ class MPPIController:
     # MPPI params
     self.T = T # Length of rollout horizon
     self.K = K # Number of sample rollouts
-    self.sigma = sigma
+    # self.sigma = sigma
+    self.sigma = 0.5 * torch.eye(2)
     self._lambda = _lambda
     self.dt = None
 
@@ -47,26 +48,27 @@ class MPPIController:
     # TODO
     # you should pre-allocate GPU memory when you can, and re-use it when
     # possible for arrays storing your controls or calculated MPPI costs, etc
-    model_name = rospy.get_param("~nn_model", "myneuralnetisbestneuralnet.pt")
-    self.model = torch.load(model_name)
+
+    # model_name = rospy.get_param("~nn_model", "myneuralnetisbestneuralnet.pt")
+    # self.model = torch.load(model_name)
     self.dtype = torch.float
     if torch.cuda.is_available():
       # Running everything on GPU
       self.device = torch.device("cuda")
-      self.model.cuda()  # Tell Torch to run model on GPU
+      # self.model.cuda()  # Tell Torch to run model on GPU
     else:
       # Running everything on CPU
       self.device = torch.device("cpu")
 
-    print("Loading:", model_name)
-    print("Model:\n",self.model)
+    # print("Loading:", model_name)
+    # print("Model:\n",self.model)
     print("Torch Datatype:", self.dtype)
 
     self.rollouts = torch.empty(self.K, self.T + 1, 3, dtype=self.dtype, device=self.device)  # KxTx[x, y, theta]_map
     self.controls = torch.zeros(self.K, self.T, 2, dtype=self.dtype, device=self.device)  # Tx[delta, speed] array of controls
     self.nominal_control = torch.zeros(self.T, 2, dtype=self.dtype, device=self.device)
     self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros(2), self.sigma)
-    self.noise = torch.zeros(Self.T, 2, dtype=self.dtype, device=self.device)
+    self.noise = torch.zeros(self.T, 2, dtype=self.dtype, device=self.device)
     self.cost = None
 
     # control outputs
@@ -98,14 +100,13 @@ class MPPIController:
     self.permissible_region = np.zeros_like(array_255, dtype=bool)
     self.permissible_region[array_255==0] = 1 # Numpy array of dimension (map_msg.info.height, map_msg.info.width),
                                               # With values 0: not permissible, 1: permissible
-    self.permissible_region = np.negative(self.permissible_region) # 0 is permissible, 1 is not
                                               
     print("Making callbacks")
     self.goal_sub = rospy.Subscriber("/move_base_simple/goal",
             PoseStamped, self.clicked_goal_cb, queue_size=1)
-    self.pose_sub  = rospy.Subscriber("/pf/ta/viz/inferred_pose",
+    self.pose_sub  = rospy.Subscriber("/pf/viz/inferred_pose",
             PoseStamped, self.mppi_cb, queue_size=1)
-    
+    print("Done Initializing")
   # TODO
   # You may want to debug your bounds checking code here, by clicking on a part
   # of the map and convincing yourself that you are correctly mapping the
@@ -133,7 +134,7 @@ class MPPIController:
 
   #   return pose_cost + ctrl_cost + bounds_check
 
-  def compute_cost(self):
+  def compute_costs(self):
     pose_cost = torch.zeros(self.K)
     bounds_cost = torch.zeros(self.K)
     ctrl_cost = torch.zeros(self.K)
@@ -142,7 +143,7 @@ class MPPIController:
 
     ctrl_cost = torch.sum(torch.matmul(self.nominal_control, self.sigma) * self.noise, dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
 
-    # Probably need a vectorized way of doing this
+    # TODO: Probably need a vectorized way of doing this
     for k in xrange(self.K):
       for t in xrange(self.T + 1):
         x_map = Utils.world_to_map(self.rollouts[k, t, 0].clone())  # Clone required here since world_to_map operates in place
@@ -151,7 +152,12 @@ class MPPIController:
         if not in_bounds:
           bounds_cost[k] = self.OOB_COST
 
-    self.cost = pose_cost + ctrl_cost + bounds_cost
+    cart_off = self.rollouts[:, -1, :] - self.goal  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
+    dist_cost = torch.sqrt(cart_off[:, 0]**2 + cart_off[:, 1]**2)  # Calculates magnitude of distance from goal
+
+    assert np.all(np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(pose_cost.shape, ctrl_cost.shape, bounds_cost.shape)
+    describe([pose_cost, ctrl_cost, bounds_cost, dist_cost])
+    self.cost = pose_cost + ctrl_cost + bounds_cost + dist_cost
 
   def mm_step(self, states, controls):
     # self.state_lock.acquire()
@@ -210,7 +216,7 @@ class MPPIController:
     # combine that noise with your central control sequence
     # Perform rollouts with those controls from your current pose
     # Calculate costs for each of K trajectories
-    # Perform the MPPI weighting on your calculatd costs
+    # Perform the MPPI weighting on your calculated costs
     # Scale the added noise by the weighting and add to your control sequence
     # Apply the first control values, and shift your control trajectory
     
@@ -229,14 +235,28 @@ class MPPIController:
     self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
     self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
 
+    self.compute_costs()
 
+    # Perform the MPPI weighting on your calculatd costs
+    beta = torch.min(self.cost)
+    assert beta > 0, "Minimum cost is not > 0"
+    self.cost -= beta
+    self.weights = torch.zeros_like(self.cost)
+    self.weights = torch.exp((-1/self._lambda)*(self.cost - beta))
+    self.weights = self.weights / torch.sum(self.weights)
+
+    # Generate the new nominal control
+    for t in xrange(self.T):
+      self.nominal_control[t] += torch.sum(self.weights[t] * self.noise[t, :, :], dim=0)
+    run_ctrl = self.nominal_control[0]
+    self.nominal_control = torch.cat((self.nominal_control[1:], self.nominal_control[-1]))
 
     print("MPPI: %4.5f ms" % ((time.time()-t0)*1000.0))
 
-    return run_ctrl, poses
+    return run_ctrl
 
   def mppi_cb(self, msg):
-    #print("callback")
+    print("mppi_callback")
     if self.last_pose is None:
       self.last_pose = np.array([msg.pose.position.x,
                                  msg.pose.position.y,
@@ -262,13 +282,11 @@ class MPPIController:
                          np.sin(theta),
                          np.cos(theta), 0.0, 0.0, self.dt])
 
-    run_ctrl, poses = mppi(curr_pose, nn_input)
+    run_ctrl = mppi(curr_pose, nn_input)
 
-    self.send_controls( run_ctrl[0], run_ctrl[1] )
-
-    self.visualize(poses)
+    self.send_controls(run_ctrl[0], run_ctrl[1])
   
-  def send_controls(self, speed, steer):
+  def send_controls(self, steer, speed):
     print("Speed:", speed, "Steering:", steer)
     ctrlmsg = AckermannDriveStamped()
     ctrlmsg.header.seq = self.msgid
@@ -284,7 +302,7 @@ class MPPIController:
       for i in range(0, self.num_viz_paths):
         pa = Path()
         pa.header = Utils.make_header(frame_id)
-        pa.poses = map(Utils.particle_to_posestamped, poses[i,:,:], [frame_id]*self.T)
+        pa.poses = map(Utils.particle_to_posestamped, self.rollouts[i,:,:], [frame_id]*self.T)
         self.path_pub.publish(pa)
 
 def test_MPPI(mp, N, goal=np.array([0.,0.,0.])):
@@ -314,5 +332,9 @@ if __name__ == '__main__':
   #rospy.spin()
 
   # test & DEBUG
-  mp = MPPIController(T, K, sigma, _lambda)
-  test_MPPI(mp, 10, np.array([0.,0.,0.])))
+  mppi = MPPIController(T, K, sigma, _lambda)
+  # test_MPPI(mp, 10, np.array([0.,0.,0.]))
+  while not rospy.is_shutdown(): # Keep going until we kill it
+  # Callbacks are running in separate threads
+    mppi.visualize()
+
