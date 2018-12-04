@@ -73,6 +73,7 @@ class MPCController:
       pose = np.array([msg.position.x,msg.position.y,theta])
       self.plan.append(pose)
     
+    rospy.loginfo("BAG RECEIVED AND STORED")
       #is this the entire plan? Does this get updated once we've achieved our objective?
     #  self.plan[] = msg
 
@@ -88,8 +89,8 @@ class MPCController:
   def idx_at_dist(self, lookahead_distance):
     dist = 0
     for i in len(self.plan)-1:
-      dist  += np.linalg.norm(np.array(self.plan[i+1][:-1] - np.array(self.plan[i][:-1]))  
-      if dist > lookahead_distance:
+      dist  += np.linalg.norm( np.array(self.plan[i+1][:-1]) - np.array(self.plan[i][:-1]))  
+      if (dist>lookahead_distance):
         break
     return i
 
@@ -143,6 +144,8 @@ class MPCController:
     goal_idx = int (self.idx_at_dist(self.lookahead_distance) )   
 
     if self.plan != None:
+        rospy.loginfo("Goal pose from get_next_pose")
+        rospy.loginfo(self.plan[goal_idx])
         return self.plan[goal_idx] #subject to change
 
     return None
