@@ -17,7 +17,7 @@ POSE_TOPIC = 'pf/viz/inferred_pose' # The topic to subscribe to for current pose
                                   # NOTE THAT THIS IS ONLY NECESSARY FOR VIZUALIZATION
 VIZ_TOPIC = '/mpc_controller/rollouts' # The topic to publish to for vizualizing
                                        # the computed rollouts. Publish a PoseArray.
-INFERRED_POSE_TOPIC = '/pf/viz/inferred_pose'
+
 PLAN_PUB_TOPIC = "/planner_node/full_car_plan"
 
 MAX_PENALTY = 10000 # The penalty to apply when a configuration in a rollout
@@ -59,7 +59,7 @@ class MPCController:
     self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 1) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
     self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.vizsub_cb) # Create a subscriber to the current position of the car
     self.plan_pub = rospy.Publisher(PLAN_PUB_TOPIC, PoseArray, queue_size=1)
-    # self.curr_pose_sub = rospy.Subscriber(INFERRED_POSE_TOPIC, PoseStamped, self.infpose_cb)
+
     # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
 
 
@@ -69,6 +69,10 @@ class MPCController:
 # Having a fixed look ahead - of distance
 # Find the closest pose in plan to the current_pose -
 # Calculate a fixed distance ahead of this pose
+
+
+  def publish_full_car_plan(self, msg):
+    self.plan_pub.publish(msg)
 
 
   def idx_at_dist(self, lookahead_distance):
@@ -83,7 +87,7 @@ class MPCController:
     # Find the first element of the plan that is in front of the robot, and remove
     # any elements that are behind the robot. To do this:
     # Loop over the plan (starting at the beginning) For each configuration in the plan
-        # If the configuration is behind the robot, remove it from the plan
+        # If the configuration is behind theg robot, remove it from the plan
         #   Will want to perform a coordinate transformation to determine if 
         #   the configuration is in front or behind the robot
         # If the configuration is in front of the robot, break out of the loop
@@ -134,7 +138,6 @@ class MPCController:
         return self.plan[goal_idx] #subject to change
 
     return None
-  
 
   '''
   Vizualize the rollouts. Transforms the rollouts to be in the frame of the world.
@@ -255,7 +258,7 @@ class MPCController:
     # YOUR CODE HERE
 
     #Need to call get_next_pose only if current_pose is near plan_pose
-    plan_pose = self.get_next_pose()
+    plan_pose = self.plan[0]
     T = self.rollouts.shape[1]
     while (rospy.Time.now().to_sec() - start < self.compute_time and traj_depth < T):
         for n in range(self.rollouts.shape[0]):
@@ -414,15 +417,23 @@ def main():
   
   bag = rosbag.Bag(bag_path)
   plan = deque()
-  for _, plan_msg, _ in bag.read_messages(topics='/planner_node/full_car_plan'):
+
+  # for topic, msg, t in bag.read_messages(topics=BAG_TOPIC):
+  #   msgList.append(msg)
+
+  for _, plan_msg, _ in bag.read_messages(topics=PLAN_PUB_TOPIC):
     for i, msg in enumerate(plan_msg.poses):
       theta = utils.quaternion_to_angle(msg.orientation)
       pose = np.array([msg.position.x,msg.position.y,theta])
       plan.append(pose)
-    
+  
   rospy.loginfo("BAG RECEIVED AND STORED")
   # Create the MPCControllerer
   lw = MPCController(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance, plan)
+  
+  rospy.sleep(1)
+  lw.publish_full_car_plan(plan_msg)
+
   # Keep the node alive
   rospy.spin()
 
