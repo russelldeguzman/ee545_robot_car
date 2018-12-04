@@ -58,11 +58,11 @@ class MPPIController:
     # self.model = torch.load(model_name)
     self.dtype = torch.float
     if torch.cuda.is_available():
-      # Running everything on GPU
+      print('Running PyTorch on GPU')
       self.device = torch.device("cuda")
       # self.model.cuda()  # Tell Torch to run model on GPU
     else:
-      # Running everything on CPU
+      print('Running PyTorch on CPU')
       self.device = torch.device("cpu")
 
     # print("Loading:", model_name)
