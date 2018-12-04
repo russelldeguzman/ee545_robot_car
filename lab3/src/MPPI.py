@@ -32,13 +32,13 @@ class MPPIController:
     self.CAR_LENGTH = 0.33 
     self.OOB_COST = 100000 # Cost associated with an out-of-bounds pose
     self.MAX_SPEED = 1.0 # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
-    self.DIST_COST_GAIN = 2
+    self.DIST_COST_GAIN = 1000.0
 
     self.last_pose = None
     # MPPI params
     self.T = T # Length of rollout horizon
     self.K = K # Number of sample rollouts
-    self.sigma = torch.tensor([[0.003, 0.0],[0.0, 5]])
+    self.sigma = torch.tensor([[0.001, 0.0],[0.0, 0.003]])
     # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
     self._lambda = _lambda
     self.dt = None
@@ -147,9 +147,10 @@ class MPPIController:
     bounds_cost = torch.zeros(self.K)
     ctrl_cost = torch.zeros(self.K)
 
-    pose_cost = torch.sum((self.controls[:,:,1] - self.MAX_SPEED)**2, dim=1)  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
+    ### COMMENTED OUT FOR TESTING ###
+    # pose_cost = torch.sum((torch.abs(self.controls[:,:,1]) - self.MAX_SPEED)**2, dim=1)  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
-    ctrl_cost = self._lambda * torch.sum(torch.matmul(self.nominal_control, torch.inverse(self.sigma)) * self.noise, dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
+    ctrl_cost = self._lambda * torch.sum(torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma)) * torch.abs(self.noise), dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
 
     total_in_bounds = 0
     # TODO: Probably need a vectorized way of doing this
@@ -169,7 +170,7 @@ class MPPIController:
         bounds_cost[k] = self.OOB_COST
 
     cart_off = self.rollouts[:, -1, :] - torch.tensor(self.goal, dtype=self.dtype, device=self.device)  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
-    dist_cost = torch.sqrt(cart_off[:, 0]**2 + cart_off[:, 1]**2)  # Calculates magnitude of distance from goal
+    dist_cost = torch.tensor(self.DIST_COST_GAIN) * torch.sqrt(cart_off[:, 0]**2 + cart_off[:, 1]**2)  # Calculates magnitude of distance from goal
 
     assert np.all(np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(pose_cost.shape, ctrl_cost.shape, bounds_cost.shape)
     # describe([pose_cost, ctrl_cost, bounds_cost, dist_cost])
@@ -357,7 +358,7 @@ if __name__ == '__main__':
   rospy.init_node("mppi", anonymous=True) # Initialize the node
 
   T = 20
-  K = 512
+  K = 1024
   sigma = 0.05 # These values will need to be tuned
   _lambda = 1.0
 
