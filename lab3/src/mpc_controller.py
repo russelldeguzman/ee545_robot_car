@@ -4,7 +4,7 @@ import rospy
 import numpy as np
 import math
 import sys
-
+import rosbag
 import utils
 
 from sensor_msgs.msg import LaserScan
@@ -13,11 +13,11 @@ from geometry_msgs.msg import PoseStamped, PoseArray, Pose
 
 SCAN_TOPIC = '/scan' # The topic to subscribe to for laser scans
 CMD_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' # The topic to publish controls to
-POSE_TOPIC = '/inferred_pose' # The topic to subscribe to for current pose of the car (From the particle filter)
+POSE_TOPIC = 'pf/viz/inferred_pose' # The topic to subscribe to for current pose of the car (From the particle filter)
                                   # NOTE THAT THIS IS ONLY NECESSARY FOR VIZUALIZATION
 VIZ_TOPIC = '/mpc_controller/rollouts' # The topic to publish to for vizualizing
                                        # the computed rollouts. Publish a PoseArray.
-
+INFERRED_POSE_TOPIC = '/pf/viz/inferred_pose'
 PLAN_SUB_TOPIC = "/planner_node/full_car_plan"
 
 MAX_PENALTY = 10000 # The penalty to apply when a configuration in a rollout
@@ -41,7 +41,7 @@ class MPCController:
     compute_time: The amount of time (in seconds) we can spend computing the cost
     laser_offset: How much to shorten the laser measurements
   '''
-  def __init__(self, rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr):
+  def __init__(self, rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance):
     # Store the params for later
     self.rollouts = rollouts
     self.deltas = deltas
@@ -50,26 +50,106 @@ class MPCController:
     self.laser_offset = laser_offset
     self.laser_window = laser_window
     self.delta_incr = delta_incr
+    self.lookahead_distance = lookahead_distance
     self.prev_angle = None
     self.plan = None
+    self.current_pose = None
     # YOUR CODE HERE
     self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 1)
     self.laser_sub = rospy.Subscriber(SCAN_TOPIC, LaserScan, self.wander_cb)
     self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 1) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
     self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.vizsub_cb) # Create a subscriber to the current position of the car
-    self.plan_sub = rospy.Subscriber(PLAN_SUB_TOPIC, PoseArray, self.plan_cb)
-
+#    self.plan_sub = rospy.Subscriber(PLAN_SUB_TOPIC, PoseArray, self.plan_cb)
+#    self.curr_pose_sub = rospy.Subscriber(INFERRED_POSE_TOPIC, PoseStamped, self.infpose_cb)
     # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
 
-  def plan_cb(self, msg):
+  def plan_cb(self):
+    bag = rosbag.Bag('full_car_plan.bag')
+    _, plan_msg, _ = bag.read_messages(topics='/planner_node/full_car_plan')
+
+    self.plan = deque()
+    for msg in plan_msg.poses:
+      theta = utils.quaternion_to_angle(msg.orientation)
+      pose = np.array([msg.position.x,msg.position.y,theta])
+      self.plan.append(pose)
+    
+    rospy.loginfo("BAG RECEIVED AND STORED")
       #is this the entire plan? Does this get updated once we've achieved our objective?
-      self.plan = msg
+    #  self.plan[] = msg
+
+
 # This should always return the current goal we're navigating to
 # it should only update once we've achieved that goal
-  def get_next_pose(self, pose_plan):
+
+# Having a fixed look ahead - of distance
+# Find the closest pose in plan to the current_pose -
+# Calculate a fixed distance ahead of this pose
+
+
+  def idx_at_dist(self, lookahead_distance):
+    dist = 0
+    for i in len(self.plan)-1:
+      dist  += np.linalg.norm( np.array(self.plan[i+1][:-1]) - np.array(self.plan[i][:-1]))  
+      if (dist>lookahead_distance):
+        break
+    return i
+
+  def get_next_pose(self):
+    # Find the first element of the plan that is in front of the robot, and remove
+    # any elements that are behind the robot. To do this:
+    # Loop over the plan (starting at the beginning) For each configuration in the plan
+        # If the configuration is behind the robot, remove it from the plan
+        #   Will want to perform a coordinate transformation to determine if 
+        #   the configuration is in front or behind the robot
+        # If the configuration is in front of the robot, break out of the loop
+      # This code starts at the beginning of self.plan and marches forward until 
+      # it encounters a pose that is in front of the car 
+      # To do this, simply we will make use of the dot product instead of coordinate transformations.
+      # First calculate vector between carPose and planPose, vectorC2P
+      # If dot product between carPose unit vector and vectorC2P is positive, then the point is in front 
+      # If dot product between carPose unit vector and vectorC2P is negative, then the point is behind 
+    while True:
+      try:
+        [target_x, target_y, target_th] = self.plan.popleft()
+
+        # Vector between ith pose and the current car pse
+        vectorC2P = [target_x - self.current_pose[0], target_y - self.current_pose[1]]
+
+        # Unit vector in the direction of the car pose 
+        carPoseVector = [np.cos(self.current_pose[2]), np.sin(self.current_pose[2])]
+        dotProduct = np.dot(vectorC2P, carPoseVector)
+
+        # If dot product is positive value, then the target node is in front 
+        # Break out of the while loop if dot product > -0.2 (i.e. target node is in front)
+        if dotProduct > -0.2:   # Counting a point as "in front" when the dot product is slightly negative helps make sure the robot doesn't stop slightly short of the last pose in the array
+          self.plan.appendleft(np.array([target_x, target_y, target_th])) # If it turns out the point was in front, put it back in the deque in case it's still in front at the next timestep
+          rospy.loginfo("Quiting While Loop - Point forward of car reached")
+          rospy.loginfo("self.plan length") 
+          rospy.loginfo(len(self.plan))
+          break
+      except IndexError:
+        rospy.loginfo("THIS SHOULD BE THE END OF MSGs")
+        return [0,0,0]
+
+    # At this point, we have removed configurations from the plan that are behind
+    # the robot. Therefore, element 0 is the first configuration in the plan that is in 
+    # front of the robot. To allow the robot to have some amount of 'look ahead',
+    # we choose to have the robot head towards the configuration at index 0 + self.plan_lookahead
+    # We call this index the goal_index
+
+    # Plain Lookahead
+    #goal_idx = int(min(0+self.plan_lookahead, len(self.plan)-1))
+
+    # Distance Lookahead
+    goal_idx = int (self.idx_at_dist(self.lookahead_distance) )   
+
     if self.plan != None:
-        return pose_plan.pop[0] #subject to change
+        rospy.loginfo("Goal pose from get_next_pose")
+        rospy.loginfo(self.plan[goal_idx])
+        return self.plan[goal_idx] #subject to change
+
     return None
+  
 
   '''
   Vizualize the rollouts. Transforms the rollouts to be in the frame of the world.
@@ -188,11 +268,13 @@ class MPCController:
     #       delta_costs[n] += cost of the t=traj_depth step of trajectory n
     #   traj_depth += 1
     # YOUR CODE HERE
+
+    #Need to call get_next_pose only if current_pose is near plan_pose
     plan_pose = self.get_next_pose()
     T = self.rollouts.shape[1]
     while (rospy.Time.now().to_sec() - start < self.compute_time and traj_depth < T):
         for n in range(self.rollouts.shape[0]):
-            delta_costs[n] += self.compute_cost(self.deltas[n], self.rollouts[n][traj_depth],msg,plan_pose)
+            delta_costs[n] += self.compute_cost(self.deltas[n], self.rollouts[n][traj_depth], msg, plan_pose)
         traj_depth += 1
 
     # Find the delta that has the smallest cost and execute it by publishing
@@ -232,10 +314,8 @@ def kinematic_model_step(pose, control, car_length):
 
   # if(np.isfinite(tan(control[1])) ) == False):
   #   control[1]+= 0.1
-
   B = math.atan(  0.5*math.tan(control[1]) )
   theta_next = pose[2] + (control[0]/car_length)*(math.sin(2*B))*control[2]
-
 
   if(theta_next<0):
     theta_next = 2*math.pi + theta_next
@@ -339,7 +419,7 @@ def main():
   T = rospy.get_param('~T')# Starting val: 300
   compute_time = rospy.get_param('~compute_time') # Default val: 0.09
   laser_offset = rospy.get_param('~laser_offset')# Starting val: 1.0
-
+  lookahead_distance = rospy.get_param('~lookahead_dist', 2)# Default Val: 2m
   # DO NOT ADD THIS TO YOUR LAUNCH FILE, car_length is already provided by teleop.launch
   car_length = rospy.get_param("car_kinematics/car_length", 0.33)
 
@@ -348,7 +428,7 @@ def main():
                                            delta_incr, dt, T, car_length)
 
   # Create the MPCControllerer
-  lw = MPCController(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr)
+  lw = MPCController(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance)
 
   # Keep the node alive
   rospy.spin()
