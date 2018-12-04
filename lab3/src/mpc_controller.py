@@ -6,7 +6,7 @@ import math
 import sys
 import rosbag
 import utils
-
+from collections import deque
 from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import PoseStamped, PoseArray, Pose
@@ -18,11 +18,10 @@ POSE_TOPIC = 'pf/viz/inferred_pose' # The topic to subscribe to for current pose
 VIZ_TOPIC = '/mpc_controller/rollouts' # The topic to publish to for vizualizing
                                        # the computed rollouts. Publish a PoseArray.
 INFERRED_POSE_TOPIC = '/pf/viz/inferred_pose'
-PLAN_SUB_TOPIC = "/planner_node/full_car_plan"
+PLAN_PUB_TOPIC = "/planner_node/full_car_plan"
 
 MAX_PENALTY = 10000 # The penalty to apply when a configuration in a rollout
                     # goes beyond the corresponding laser scan
-
 '''
 Wanders around using minimum (steering angle) control effort while avoiding crashing
 based off of laser scans.
@@ -41,7 +40,7 @@ class MPCController:
     compute_time: The amount of time (in seconds) we can spend computing the cost
     laser_offset: How much to shorten the laser measurements
   '''
-  def __init__(self, rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance):
+  def __init__(self, rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance, plan):
     # Store the params for later
     self.rollouts = rollouts
     self.deltas = deltas
@@ -51,31 +50,17 @@ class MPCController:
     self.laser_window = laser_window
     self.delta_incr = delta_incr
     self.lookahead_distance = lookahead_distance
+    self.plan = plan
     self.prev_angle = None
-    self.plan = None
     self.current_pose = None
     # YOUR CODE HERE
     self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size = 1)
     self.laser_sub = rospy.Subscriber(SCAN_TOPIC, LaserScan, self.wander_cb)
     self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 1) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
     self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.vizsub_cb) # Create a subscriber to the current position of the car
-#    self.plan_sub = rospy.Subscriber(PLAN_SUB_TOPIC, PoseArray, self.plan_cb)
-#    self.curr_pose_sub = rospy.Subscriber(INFERRED_POSE_TOPIC, PoseStamped, self.infpose_cb)
+    self.plan_pub = rospy.Publisher(PLAN_PUB_TOPIC, PoseArray, queue_size=1)
+    # self.curr_pose_sub = rospy.Subscriber(INFERRED_POSE_TOPIC, PoseStamped, self.infpose_cb)
     # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
-
-  def plan_cb(self):
-    bag = rosbag.Bag('full_car_plan.bag')
-    _, plan_msg, _ = bag.read_messages(topics='/planner_node/full_car_plan')
-
-    self.plan = deque()
-    for msg in plan_msg.poses:
-      theta = utils.quaternion_to_angle(msg.orientation)
-      pose = np.array([msg.position.x,msg.position.y,theta])
-      self.plan.append(pose)
-    
-    rospy.loginfo("BAG RECEIVED AND STORED")
-      #is this the entire plan? Does this get updated once we've achieved our objective?
-    #  self.plan[] = msg
 
 
 # This should always return the current goal we're navigating to
@@ -88,7 +73,7 @@ class MPCController:
 
   def idx_at_dist(self, lookahead_distance):
     dist = 0
-    for i in len(self.plan)-1:
+    for i in xrange(len(self.plan)-1) :
       dist  += np.linalg.norm( np.array(self.plan[i+1][:-1]) - np.array(self.plan[i][:-1]))  
       if (dist>lookahead_distance):
         break
@@ -422,14 +407,22 @@ def main():
   lookahead_distance = rospy.get_param('~lookahead_dist', 2)# Default Val: 2m
   # DO NOT ADD THIS TO YOUR LAUNCH FILE, car_length is already provided by teleop.launch
   car_length = rospy.get_param("car_kinematics/car_length", 0.33)
-
+  bag_path = rospy.get_param('~bag_path')
   # Generate the rollouts
-  rollouts, deltas = generate_mpc_rollouts(speed, min_delta, max_delta,
-                                           delta_incr, dt, T, car_length)
+  rollouts, deltas = generate_mpc_rollouts(speed, min_delta, max_delta, delta_incr, dt, T, car_length)
 
+  
+  bag = rosbag.Bag(bag_path)
+  plan = deque()
+  for _, plan_msg, _ in bag.read_messages(topics='/planner_node/full_car_plan'):
+    for i, msg in enumerate(plan_msg.poses):
+      theta = utils.quaternion_to_angle(msg.orientation)
+      pose = np.array([msg.position.x,msg.position.y,theta])
+      plan.append(pose)
+    
+  rospy.loginfo("BAG RECEIVED AND STORED")
   # Create the MPCControllerer
-  lw = MPCController(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance)
-
+  lw = MPCController(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance, plan)
   # Keep the node alive
   rospy.spin()
 
