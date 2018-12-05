@@ -15,7 +15,7 @@ import utils
 PUB_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' 
 # SUB_TOPIC = '/sim_car_pose/pose' # The topic that provides the simulated car pose
 MAP_TOPIC = 'static_map' # The service topic that will provide the map
-
+VIZ_TOPIC = '/mpc_controller/rollouts'
 '''
 Follows a given plan using constant velocity and PID control of the steering angle
 '''
@@ -59,10 +59,9 @@ class LineFollower:
     
     # Publisher 
     self.cmd_pub = rospy.Publisher(PUB_TOPIC, AckermannDriveStamped, queue_size =10)
-
+    self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 1) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
     # Create a subscriber to pose_topic, with callback 'self.pose_cb'
     self.pose_sub = rospy.Subscriber(pose_topic, PoseStamped, self.pose_cb, queue_size = 1)
-
   
   '''
   Computes the error based on the current pose of the car
@@ -235,6 +234,62 @@ class LineFollower:
     
     # Send the control message
     self.cmd_pub.publish(ads)
+
+    self.visualize_rollouts(cur_pose)
+  
+  """
+  Vizualize the rollouts. Transforms the rollouts to be in the frame of the world.
+  Only display the last pose of each rollout to prevent lagginess
+    msg: A PoseStamped representing the current pose of the car
+  """
+
+    def visualize_rollouts(self, cur_pose):
+        # Create the PoseArray to publish. Will contain N poses, where the n-th pose
+        # represents the last pose in the n-th trajectory
+        pa = PoseArray()
+        pa.header.frame_id = "/map"
+        pa.header.stamp = rospy.Time.now()
+        self.current_pose = [
+            cur_pose[0],
+            cur_pose[1],
+            cur_pose[2],
+        ]
+        # Transform the last pose of each trajectory to be w.r.t the world and insert into
+        # the pose array
+        # YOUR CODE HERE
+        for n in range(self.rollouts.shape[0]):
+            M = transformations.compose_matrix(
+                translate=(self.current_pose[0], self.current_pose[1], 0),
+                angles=(0, 0, self.current_pose[2]),
+            )
+            # M_inv = np.linalg.inv(M)
+            [x, y, z, w] = np.dot(
+                M, np.array([self.rollouts[n][-1][0], self.rollouts[n][-1][1], 0, 1]).T
+            )
+
+            pose = Pose()
+            xyzw_array = lambda o: np.array([o.x, o.y, o.z, o.w])
+            quat1 = [
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+                msg.pose.orientation.w,
+            ]
+            quat2_raw = utils.angle_to_quaternion(self.rollouts[n][-1][2])
+            quat2 = xyzw_array(quat2_raw)
+            # quat2 = [self.rollouts[n][-1][2][0], self.rollouts[n][-1][2][1], self.rollouts[n][-1][2][2], self.rollouts[n][-1][2][3]]
+            # rospy.loginfo("Quaternion:")
+            # rospy.loginfo(utils.angle_to_quaternion(self.rollouts[n][-1][2:]))
+            # rospy.loginfo("\n")
+            orientation_raw = transformations.quaternion_multiply(quat1, quat2)
+            # rospy.loginfo(orientation_raw)
+            pose.orientation = Quaternion(*orientation_raw)
+            pose.position.x = x
+            pose.position.y = y
+            pose.position.z = 0
+            pa.poses.append(pose)
+
+        self.viz_pub.publish(pa)
 
 def main():
 
