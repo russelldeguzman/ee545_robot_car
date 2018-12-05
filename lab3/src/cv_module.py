@@ -13,23 +13,14 @@ from sensor_msgs.msg import Image
 import math
 from ackermann_msgs.msg import AckermannDriveStamped
 from cv_bridge import CvBridge, CvBridgeError
-
+from collections import deque
 
 IMAGE_TOPIC = '/camera/color/image_raw'
 CMD_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' # The topic to publish controls to
 IMGPUB_TOPIC = '/cv_module/image_op'
 
 class RBFilter:
-
-    def __init__(self,
-                min_angle,
-                max_angle,
-                angle_incr,
-                speed,
-                kp,
-                ki,
-                kd,
-                error_buff_length):
+    def __init__(self, min_angle, max_angle, angle_incr,speed, kp, ki, kd, error_buff_length):
         # Storing Params if needed
         self.min_angle = min_angle
         self.max_angle = max_angle
@@ -49,13 +40,12 @@ class RBFilter:
         self.mask_red = None
         self.mask_blue = None
 
-"""
-  Computes the error based on the current pose of the car
+    """
+    Computes the error based on the current pose of the car
     cur_pose: The current pose of the car, represented as a numpy array [x,y,theta]
-  Returns: (False, 0.0) if the end of the plan has been reached. Otherwise, returns
-           (True, E) - where E is the computed error
-"""
-
+    Returns: (False, 0.0) if the end of the plan has been reached. Otherwise, returns
+    (True, E) - where E is the computed error
+    """
     def compute_error(self, centroid_x_pos, img_width):
         return (img_width / 2) - centroid_x_pos
 
