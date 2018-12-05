@@ -19,7 +19,7 @@ VIZ_TOPIC = '/mpc_controller/rollouts' # The topic to publish to for vizualizing
                                        # the computed rollouts. Publish a PoseArray.
 
 PLAN_PUB_TOPIC = "/planner_node/full_car_plan"
-
+GOAL_TOPIC = '/mpc_controller/rollouts'
 MAX_PENALTY = 10000 # The penalty to apply when a configuration in a rollout
                     # goes beyond the corresponding laser scan
 '''
@@ -59,7 +59,7 @@ class MPCController:
     self.viz_pub = rospy.Publisher(VIZ_TOPIC, PoseArray, queue_size = 1) # Create a publisher for vizualizing trajectories. Will publish PoseArrays
     self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.vizsub_cb) # Create a subscriber to the current position of the car
     self.plan_pub = rospy.Publisher(PLAN_PUB_TOPIC, PoseArray, queue_size=1)
-
+    self.goal_pub = rospy.Publisher(GOAL_TOPIC, PoseStamped, queue_size=1)
     # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
 
 
@@ -78,7 +78,7 @@ class MPCController:
   def idx_at_dist(self, lookahead_distance):
     dist = 0
     for i in xrange(len(self.plan)-1) :
-      dist  += np.linalg.norm( np.array(self.plan[i+1][:-1]) - np.array(self.plan[i][:-1]))  
+      dist  += np.linalg.norm( np.array(self.plan[i+1][:-1]) - np.array(self.plan[i][:-1]))
       if (dist>lookahead_distance):
         break
     return i
@@ -88,34 +88,34 @@ class MPCController:
     # any elements that are behind the robot. To do this:
     # Loop over the plan (starting at the beginning) For each configuration in the plan
         # If the configuration is behind theg robot, remove it from the plan
-        #   Will want to perform a coordinate transformation to determine if 
+        #   Will want to perform a coordinate transformation to determine if
         #   the configuration is in front or behind the robot
         # If the configuration is in front of the robot, break out of the loop
-      # This code starts at the beginning of self.plan and marches forward until 
-      # it encounters a pose that is in front of the car 
+      # This code starts at the beginning of self.plan and marches forward until
+      # it encounters a pose that is in front of the car
       # To do this, simply we will make use of the dot product instead of coordinate transformations.
       # First calculate vector between carPose and planPose, vectorC2P
-      # If dot product between carPose unit vector and vectorC2P is positive, then the point is in front 
-      # If dot product between carPose unit vector and vectorC2P is negative, then the point is behind 
+      # If dot product between carPose unit vector and vectorC2P is positive, then the point is in front
+      # If dot product between carPose unit vector and vectorC2P is negative, then the point is behind
     while True:
       try:
         [target_x, target_y, target_th] = self.plan.popleft()
-        
+
         rospy.loginfo("This is the current Pose ")
         rospy.loginfo(self.current_pose[0])
         # Vector between ith pose and the current car pse
         vectorC2P = [target_x - self.current_pose[0], target_y - self.current_pose[1]]
 
-        # Unit vector in the direction of the car pose 
+        # Unit vector in the direction of the car pose
         carPoseVector = [np.cos(self.current_pose[2]), np.sin(self.current_pose[2])]
         dotProduct = np.dot(vectorC2P, carPoseVector)
 
-        # If dot product is positive value, then the target node is in front 
+        # If dot product is positive value, then the target node is in front
         # Break out of the while loop if dot product > -0.2 (i.e. target node is in front)
         if dotProduct > -0.2:   # Counting a point as "in front" when the dot product is slightly negative helps make sure the robot doesn't stop slightly short of the last pose in the array
           self.plan.appendleft(np.array([target_x, target_y, target_th])) # If it turns out the point was in front, put it back in the deque in case it's still in front at the next timestep
           rospy.loginfo("Quiting While Loop - Point forward of car reached")
-          rospy.loginfo("self.plan length") 
+          rospy.loginfo("self.plan length")
           rospy.loginfo(len(self.plan))
           break
       except IndexError:
@@ -123,7 +123,7 @@ class MPCController:
         return [0,0,0]
 
     # At this point, we have removed configurations from the plan that are behind
-    # the robot. Therefore, element 0 is the first configuration in the plan that is in 
+    # the robot. Therefore, element 0 is the first configuration in the plan that is in
     # front of the robot. To allow the robot to have some amount of 'look ahead',
     # we choose to have the robot head towards the configuration at index 0 + self.plan_lookahead
     # We call this index the goal_index
@@ -132,11 +132,13 @@ class MPCController:
     #goal_idx = int(min(0+self.plan_lookahead, len(self.plan)-1))
 
     # Distance Lookahead
-    goal_idx = int (self.idx_at_dist(self.lookahead_distance) )   
+    goal_idx = int (self.idx_at_dist(self.lookahead_distance) )
 
     if self.plan != None:
         rospy.loginfo("Goal pose from get_next_pose")
         rospy.loginfo(self.plan[goal_idx])
+        rospy.loginfo("current pose")
+        rospy.loginfo(self.current_pose)
         return self.plan[goal_idx] #subject to change
 
     return None
@@ -146,7 +148,7 @@ class MPCController:
   Only display the last pose of each rollout to prevent lagginess
     msg: A PoseStamped representing the current pose of the car
   '''
-    
+
   def vizsub_cb(self, msg):
     # Create the PoseArray to publish. Will contain N poses, where the n-th pose
     # represents the last pose in the n-th trajectory
@@ -162,10 +164,10 @@ class MPCController:
 
         #Displays number of arrows in range
         # Publishes every 3rd pose from end
-        for m in range(5):
+        for m in range(1):
             pose = Pose()
 
-            #Rotation of the rollout as well as a coordinate transformation of the vector 
+            #Rotation of the rollout as well as a coordinate transformation of the vector
             rollout_angle =  self.rollouts[n][-1-3*m][2] + self.current_pose[2]
             x_rotated_rollout = self.rollouts[n][-1-3*m][0]*np.cos(self.current_pose[2])-self.rollouts[n][-1-3*m][1]*np.sin(self.current_pose[2])
             y_rotated_rollout = self.rollouts[n][-1-3*m][0]*np.sin(self.current_pose[2])+self.rollouts[n][-1-3*m][1]*np.cos(self.current_pose[2])
@@ -176,7 +178,7 @@ class MPCController:
             pose.position.y = y_rotated_rollout + self.current_pose[1]
             pose.position.z = 0
             pa.poses.append(pose)
-        
+
     self.viz_pub.publish(pa)
 
   """
@@ -216,34 +218,39 @@ class MPCController:
 
     #intialize the cost to be the euclid distance from the objective
     if plan_pose is not None:
-        cost = np.linalg.norm(np.array(plan_pose[:-1]) - np.array(rollout_pose[:-1]))
+        angle = np.abs(plan_pose[-1] - (rollout_pose[-1] + self.current_pose[-1]))
+        rot_mat = utils.rotation_matrix(self.current_pose[-1])
+        world_pose = rot_mat * np.array(plan_pose[:-1]).reshape(2,1) + np.array(self.current_pose[:-1]).reshape(2,1)
+        world_pose.flatten()
+        euclid = np.linalg.norm(np.array(plan_pose[:-1]) - world_pose[:-1])
+        cost = 0.8 * angle + 0.2 * euclid
     else:
         cost = np.absolute(delta) #FIXME: Is this the right thing to do?
-    current_pose = [0,0,0]
-    rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
-    rollout_pose_distance = np.linalg.norm(np.array(current_pose[:-1]) - np.array(rollout_pose[:-1]))
+    # current_pose = [0,0,0]
+    # rollout_pose_angle = self._compute_pose_angle(current_pose, rollout_pose)
+    # rollout_pose_distance = np.linalg.norm(np.array(current_pose[:-1]) - np.array(rollout_pose[:-1]))
 
     # if the laser can't see this position, assign max penalty, (e.g. assume that there's something there)
     # if rollout_pose_angle < laser_msg.angle_min or rollout_pose_angle > laser_msg.angle_max:
     #     cost += MAX_PENALTY
     #     return cost
 
-    for i in range(0, self.laser_window):
-        angle_index = (int) ((rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment)
-        if (angle_index + i) < len(laser_msg.ranges):
-            angle_index += i
-            laser_ray_dist = laser_msg.ranges[angle_index]
+    # for i in range(0, self.laser_window):
+    #     angle_index = (int) ((rollout_pose_angle - laser_msg.angle_min) / laser_msg.angle_increment)
+    #     if (angle_index + i) < len(laser_msg.ranges):
+    #         angle_index += i
+    #         laser_ray_dist = laser_msg.ranges[angle_index]
+    #
+    #         # we want to ignore NaN and 0 values (as per Patrick's note)
+    #         # these are non-converged sensor values which will result in udefnined(bad) behavior
+    #         if np.isfinite(laser_ray_dist) and laser_ray_dist > 0 and rollout_pose_distance > (laser_ray_dist - np.abs(self.laser_offset)):
+    #             cost += MAX_PENALTY
+    #             return cost
 
-            # we want to ignore NaN and 0 values (as per Patrick's note)
-            # these are non-converged sensor values which will result in udefnined(bad) behavior
-            if np.isfinite(laser_ray_dist) and laser_ray_dist > 0 and rollout_pose_distance > (laser_ray_dist - np.abs(self.laser_offset)):
-                cost += MAX_PENALTY
-                return cost
-
-    if self.prev_angle != None :
-        prev_angle = self.prev_angle
-        if np.abs( prev_angle - delta ) > ( 2 * self.delta_incr ):
-            cost += MAX_PENALTY
+    # if self.prev_angle != None :
+    #     prev_angle = self.prev_angle
+    #     if np.abs( prev_angle - delta ) > ( 2 * self.delta_incr ):
+    #         cost += MAX_PENALTY
 
     return cost
 
@@ -274,10 +281,16 @@ class MPCController:
 
     #Need to call get_next_pose only if current_pose is near plan_pose
     plan_pose = self.get_next_pose()
+    p = PoseStamped()
+    p.header = utils.make_header('map')
+    p.pose.position.x = plan_pose[0]
+    p.pose.position.y = plan_pose[1]
+    p.pose.orientation = utils.angle_to_quaternion(plan_pose[2])
+    self.goal_pub.publish(p)
     T = self.rollouts.shape[1]
     while (rospy.Time.now().to_sec() - start < self.compute_time and traj_depth < T):
         for n in range(self.rollouts.shape[0]):
-            delta_costs[n] += self.compute_cost(self.deltas[n], self.rollouts[n][traj_depth], msg, plan_pose)
+            delta_costs[n] = self.compute_cost(self.deltas[n], self.rollouts[n][traj_depth], msg, plan_pose)
         traj_depth += 1
 
     # Find the delta that has the smallest cost and execute it by publishing
@@ -292,6 +305,8 @@ class MPCController:
     # else:
     min_delta_index = np.argmin(delta_costs)
     min_delta = self.deltas[min_delta_index]
+    rospy.loginfo(delta_costs)
+    rospy.loginfo(min_delta_index)
     self.prev_angle = min_delta #keep track of the angle we chose
     drive_msg.header.stamp = rospy.Time.now()
     drive_msg.header.frame_id = '/map'
@@ -429,7 +444,7 @@ def main():
   # Generate the rollouts
   rollouts, deltas = generate_mpc_rollouts(speed, min_delta, max_delta, delta_incr, dt, T, car_length)
 
-  
+
   bag = rosbag.Bag(bag_path)
   plan = deque()
 
@@ -441,11 +456,11 @@ def main():
       theta = utils.quaternion_to_angle(msg.orientation)
       pose = np.array([msg.position.x,msg.position.y,theta])
       plan.append(pose)
-  
+
   rospy.loginfo("BAG RECEIVED AND STORED")
   # Create the MPCControllerer
   lw = MPCController(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance, plan)
-  
+
   rospy.sleep(1)
   lw.publish_full_car_plan(plan_msg)
 
