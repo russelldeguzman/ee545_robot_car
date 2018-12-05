@@ -49,6 +49,10 @@ class MPPIController:
     self.device = None
     self.state_lock = Lock()
 
+    self.missed_msgs = 0
+    self.max_angle = -10000.0
+    self.min_angle = 10000.0
+
     # PyTorch / GPU data configuration
     # TODO
     # you should pre-allocate GPU memory when you can, and re-use it when
@@ -73,7 +77,7 @@ class MPPIController:
     self.controls = torch.zeros(self.K, self.T, 2, dtype=self.dtype, device=self.device)  # Tx[delta, speed] array of controls
     self.nominal_control = torch.zeros(self.T, 2, dtype=self.dtype, device=self.device)
     self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros(2), self.sigma)
-    self.noise = torch.zeros(self.T, 2, dtype=self.dtype, device=self.device)
+    self.noise = torch.zeros(self.K, self.T, 2, dtype=self.dtype, device=self.device)
     self.cost = None
     self.nominal_rollout = torch.zeros(self.T, 3, dtype=self.dtype, device=self.device)
     # control outputs
@@ -126,22 +130,6 @@ class MPPIController:
                           Utils.quaternion_to_angle(msg.pose.orientation)])
     print("Current Pose: ", self.last_pose)
     print("SETTING Goal: ", self.goal)
-    
-  # def running_cost(self, pose, goal, ctrl, noise):
-  #   # TODO
-  #   # This cost function drives the behavior of the car. You want to specify a
-  #   # cost function that penalizes behavior that is bad with high cost, and
-  #   # encourages good behavior with low cost.
-  #   # We have split up the cost function for you to a) get the car to the goal
-  #   # b) avoid driving into walls and c) the MPPI control penalty to stay
-  #   # smooth
-  #   # You should feel free to explore other terms to get better or unique
-  #   # behavior
-  #   pose_cost = 0.0
-  #   bounds_check = 0.0
-  #   ctrl_cost = 0.0
-
-  #   return pose_cost + ctrl_cost + bounds_check
 
   def compute_costs(self):
     pose_cost = torch.zeros(self.K)
@@ -150,7 +138,7 @@ class MPPIController:
 
     ### COMMENTED OUT FOR TESTING ###
     pose_cost = torch.sum((torch.abs(self.controls[:,:,1]) - self.MAX_SPEED)**2, dim=1)  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
-
+    
     ctrl_cost = self._lambda * torch.sum(torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma)) * torch.abs(self.noise), dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
 
     total_in_bounds = 0
@@ -179,7 +167,7 @@ class MPPIController:
 
     assert np.all(np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(pose_cost.shape, ctrl_cost.shape, bounds_cost.shape)
     # describe([pose_cost, ctrl_cost, bounds_cost, dist_cost])
-    print("Costs:")
+    # print("Costs:")
     for cost, name in zip([pose_cost, ctrl_cost, bounds_cost, dist_cost], ["pose_cost", "ctrl_cost", "bounds_cost", "dist_cost"]):
       if np.any(np.isnan(cost)):
         assert False, "NaNs in output: {}".format(name)
@@ -187,16 +175,17 @@ class MPPIController:
       if (name == "bounds_cost") and (torch.max(cost) > 0):
         cost = cost / torch.min(cost[torch.nonzero(cost)])
         assert torch.min(cost[torch.nonzero(cost)]) >= 1.0, "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
+        # print(name)
+        # print(cost)
         continue
 
       cost = cost - torch.min(cost)
       cost_max = torch.max(cost)
       if cost_max > 0:
         cost = cost / cost_max
-      print(name)
-      print(cost)
-    self.cost = (10 * pose_cost) + (10.0 * ctrl_cost) + (bounds_cost * 1000) + dist_cost
-
+      # print(name)
+      # print(cost)
+    self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2*dist_cost)
   def mm_step(self, states, controls):
     # self.state_lock.acquire()
     # if self.last_servo_cmd is None:
@@ -272,7 +261,9 @@ class MPPIController:
     # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
     # between inferred-poses from the particle filter.
     self.noise = self.noise_dist.rsample((self.K, self.T))  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
-    self.controls = self.nominal_control + self.noise
+    # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
+    self.controls = self.nominal_control.repeat(self.K, 1, 1) + self.noise
+    assert self.nominal_control.repeat(self.K,1,1).shape == (self.K, self.T, 2)
     self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
     self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
 
@@ -286,16 +277,17 @@ class MPPIController:
     self.weights = torch.zeros_like(self.cost)
     self.weights = torch.exp((-1.0/self._lambda)*(self.cost))
     self.weights = self.weights / torch.sum(self.weights)
-    assert torch.abs(torch.sum(self.weights) - 1) < 1e-5, "self.weights sums to {}".format(torch.sum(self.weights))
+
+    assert torch.abs(torch.sum(self.weights) - 1) < 1e-5, "self.weights sums to {} (not == 1)".format(torch.sum(self.weights))
     # Generate the new nominal control
     for t in xrange(self.T):
-      self.nominal_control[t] = self.nominal_control[t] + torch.sum(self.noise[:, t, :] * torch.cat((self.weights.view(self.K, 1), self.weights.view(self.K, 1)), dim=1), dim=0)
+      self.nominal_control[t] = self.nominal_control[t] + torch.sum(self.noise[:, t, :] * self.weights.view(self.K, 1).repeat(1,2), dim=0)
     
     for t in xrange(self.T):
       self.nominal_rollout[t] = torch.sum(self.rollouts[:, t, :] * self.weights.view(self.K, 1).repeat(1,3), dim=0)
 
     run_ctrl = self.nominal_control[0].clone()
-    self.nominal_control = torch.cat((self.nominal_control[1:], self.nominal_control[-1, :].view(1,2)))  # Rolls the array forward in time, then duplicates the last row to maintain size
+    self.nominal_control = torch.cat((self.nominal_control[1:, :], self.nominal_control[-1, :].view(1,2)))  # Rolls the array forward in time, then duplicates the last row to maintain size
 
     print("MPPI: %4.5f ms" % ((time.time()-t0)*1000.0))
 
@@ -317,6 +309,8 @@ class MPPIController:
       return
 
     theta = Utils.quaternion_to_angle(msg.pose.orientation)
+    self.min_angle = min(theta, self.min_angle)
+    self.max_angle = max(theta, self.max_angle)
     curr_pose = np.array([msg.pose.position.x,
                           msg.pose.position.y,
                           theta])
@@ -334,8 +328,10 @@ class MPPIController:
     run_ctrl = self.mppi(curr_pose, nn_input)
 
     self.send_controls(run_ctrl[0], run_ctrl[1])
-    self.visualize()
     self.state_lock.release()
+    self.visualize()
+    print(self.min_angle)
+    print(self.max_angle)
 
   def send_controls(self, steer, speed):
     print("Speed:", speed, "Steering:", steer)
@@ -381,8 +377,8 @@ def test_MPPI(mp, N, goal=np.array([0.,0.,0.])):
 if __name__ == '__main__':
   rospy.init_node("mppi", anonymous=True) # Initialize the node
 
-  T = 40
-  K = 1024
+  T = 20
+  K = 512
   sigma = 0.05 # These values will need to be tuned
   _lambda = 1.0
 
