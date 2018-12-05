@@ -29,7 +29,6 @@ class MPPIController:
     if torch.cuda.is_available():
       print('Running PyTorch on GPU')
       self.device = torch.device("cuda")
-      # self.model.cuda()  # Tell Torch to run model on GPU
     else:
       print('Running PyTorch on CPU')
       self.device = torch.device("cpu")
@@ -67,9 +66,10 @@ class MPPIController:
     # you should pre-allocate GPU memory when you can, and re-use it when
     # possible for arrays storing your controls or calculated MPPI costs, etc
 
+    # Load model
     # model_name = rospy.get_param("~nn_model", "myneuralnetisbestneuralnet.pt")
     # self.model = torch.load(model_name)
-
+    # self.model.cuda()  # Tell Torch to run model on GPU
 
     # print("Loading:", model_name)
     # print("Model:\n",self.model)
@@ -123,9 +123,9 @@ class MPPIController:
     print("Done Initializing")
 
   # TODO
-  # You may want to debug your bounds checking code here, by clicking on a part
-  # of the map and convincing yourself that you are correctly mapping the
-  # click, and thus the goal pose, to accessible places in the map
+    # You may want to debug your bounds checking code here, by clicking on a part
+    # of the map and convincing yourself that you are correctly mapping the
+    # click, and thus the goal pose, to accessible places in the map
   def clicked_goal_cb(self, msg):
     self.goal = np.array([msg.pose.position.x,
                           msg.pose.position.y,
@@ -188,6 +188,7 @@ class MPPIController:
       # print(name)
       # print(cost)
     self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2*dist_cost)
+# JPH mm code
   # def mm_step(self, states, controls):
   #   # self.state_lock.acquire()
   #   # if self.last_servo_cmd is None:
@@ -284,29 +285,30 @@ class MPPIController:
 
   def mppi(self, init_pose, init_input):
     t0 = time.time()
-    # Network input can be:
-    #   0    1       2          3           4        5      6   7
-    # xdot, ydot, thetadot, sin(theta), cos(theta), vel, delta, dt
+    # NOTE:
+      # Network input can be:
+      #   0    1       2          3           4        5      6   7
+      # xdot, ydot, thetadot, sin(theta), cos(theta), vel, delta, dt
 
-    # MPPI should
-    # generate noise according to sigma
-    # combine that noise with your central control sequence
-    # Perform rollouts with those controls from your current pose
-    # Calculate costs for each of K trajectories
-    # Perform the MPPI weighting on your calculated costs
-    # Scale the added noise by the weighting and add to your control sequence
-    # Apply the first control values, and shift your control trajectory
-    
-    # Notes:
-    # MPPI can be assisted by carefully choosing lambda, and sigma
-    # It is advisable to clamp the control values to be within the feasible range
-    # of controls sent to the Vesc
-    # Your code should account for theta being between -pi and pi. This is
-    # important.
-    # The more code that uses pytorch's cuda abilities, the better; every line in
-    # python will slow down the control calculations. You should be able to keep a
-    # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
-    # between inferred-poses from the particle filter.
+      # MPPI should
+      # generate noise according to sigma
+      # combine that noise with your central control sequence
+      # Perform rollouts with those controls from your current pose
+      # Calculate costs for each of K trajectories
+      # Perform the MPPI weighting on your calculated costs
+      # Scale the added noise by the weighting and add to your control sequence
+      # Apply the first control values, and shift your control trajectory
+      
+      # Notes:
+      # MPPI can be assisted by carefully choosing lambda, and sigma
+      # It is advisable to clamp the control values to be within the feasible range
+      # of controls sent to the Vesc
+      # Your code should account for theta being between -pi and pi. This is
+      # important.
+      # The more code that uses pytorch's cuda abilities, the better; every line in
+      # python will slow down the control calculations. You should be able to keep a
+      # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
+      # between inferred-poses from the particle filter.
     self.noise = self.noise_dist.rsample((self.K, self.T))  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
     # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
     self.controls = self.nominal_control.repeat(self.K, 1, 1) + self.noise
@@ -429,15 +431,7 @@ if __name__ == '__main__':
   sigma = 0.05 # These values will need to be tuned
   _lambda = 1.0
 
-  # run with ROS
-  #rospy.init_node("mppi_control", anonymous=True) # Initialize the node
-  #mp = MPPIController(T, K, sigma, _lambda)
-  #rospy.spin()
-
-  # test & DEBUG
   mppi = MPPIController(T, K, sigma, _lambda)
-  # test_MPPI(mp, 10, np.array([0.,0.,0.]))
   while not rospy.is_shutdown(): # Keep going until we kill it
   # Callbacks are running in separate threads
-    # mppi.visualize()
     rospy.sleep(1)
