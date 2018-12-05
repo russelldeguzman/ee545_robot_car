@@ -397,4 +397,4 @@ if __name__ == '__main__':
   while not rospy.is_shutdown(): # Keep going until we kill it
   # Callbacks are running in separate threads
     # mppi.visualize()
-    pass
+    rospy.sleep(1)
