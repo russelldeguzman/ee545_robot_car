@@ -21,15 +21,26 @@ IMGPUB_TOPIC = '/cv_module/image_op'
 
 class RBFilter:
 
-    def __init__(self, min_angle, max_angle, angle_incr, speed):
-
+    def __init__(self,
+                min_angle,
+                max_angle,
+                angle_incr,
+                speed,
+                kp,
+                ki,
+                kd,
+                error_buff_length):
         # Storing Params if needed
         self.min_angle = min_angle
         self.max_angle = max_angle
         self.angle_incr = angle_incr
         self.angles = np.arange(min_angle, max_angle, angle_incr)
         self.speed = speed
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
         self.bridge = CvBridge()
+        self.error_buff = deque(maxlen=error_buff_length)
         #Publisher, Subscribers
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
@@ -37,6 +48,16 @@ class RBFilter:
         self.hsv_img = None
         self.mask_red = None
         self.mask_blue = None
+
+"""
+  Computes the error based on the current pose of the car
+    cur_pose: The current pose of the car, represented as a numpy array [x,y,theta]
+  Returns: (False, 0.0) if the end of the plan has been reached. Otherwise, returns
+           (True, E) - where E is the computed error
+"""
+
+    def compute_error(self, centroid_x_pos, img_width):
+        return (img_width / 2) - centroid_x_pos
 
     def is_object_present(self, mask, threshold):
         _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -111,8 +132,9 @@ class RBFilter:
         # if is_blue_square_present and is_red_square_present:
         #     print "Both Blue and red present"
 
-        if is_blue_square_present:
-            turn_angle = self.calc_turn_angle(blue_x, blue_y, rgb_img.shape[1], True)
+        if is_blue_square_present and blue_y < red_y:
+            error = self.compute_error(blue_x, rgb_img.shape[1] )
+            turn_angle = self.compute_steering_angle_blue(error)
             print "Blue present turn - ", turn_angle
             drive_msg.header.stamp = rospy.Time.now()
             drive_msg.header.frame_id = '/map'
@@ -120,25 +142,56 @@ class RBFilter:
             drive_msg.drive.speed = self.speed
             self.cmd_pub.publish(drive_msg)
 
-        if is_red_square_present:
-            turn_angle = self.calc_turn_angle(red_x, red_y, rgb_img.shape[1], False)           
+        if is_red_square_present and red_y < blue_y:
+            turn_angle = self.compute_steering_angle_red(red_x, red_y, rgb_img.shape[1])
             print "Red present turn - ", turn_angle
-
+            drive_msg.header.stamp = rospy.Time.now()
+            drive_msg.header.frame_id = '/map'
+            drive_msg.drive.steering_angle = turn_angle
+            drive_msg.drive.speed = self.speed
+            self.cmd_pub.publish(drive_msg)
+            
         # cv2.imshow("HSV Image", hsv)
         # cv2.imshow("BGR8 Image", rgb_img)
+    def compute_steering_angle_blue(self, error):
+        now = rospy.Time.now().to_sec()  # Get the current time
 
-    def calc_turn_angle ( self, x, y, img_width, turn_towards ):
+        # Compute the derivative error using the passed error, the current time,
+        # the most recent error stored in self.error_buff, and the most recent time
+        # stored in self.error_buff
+        deriv_error = 0
+        if len(self.error_buff) > 0:
+
+            [last_time, last_error] = self.error_buff[-1]
+            deriv_error = (error - last_error) / (now - last_time)
+
+        # Compute the integral error by applying rectangular integration to the elements
+        integ_error = 0
+        next_time = now
+        next_error = error
+        for elem in reversed(self.error_buff):
+            error_element = (elem[1] + next_error) / 2 * (next_time - elem[0])
+            integ_error = integ_error + error_element
+
+            # Store the next time
+            next_time = elem[0]
+
+        # Add the current error to the buffer
+        self.error_buff.append((now, error))
+
+        # Compute the steering angle as the sum of the pid errors
+        steering_angle = self.kp * error + self.ki * integ_error + self.kd * deriv_error
+        rospy.loginfo("Steering Angle")
+        rospy.loginfo(steering_angle)
+        steering_angle = np.sign(steering_angle) * min(abs(steering_angle), np.pi / 2)
+        return steering_angle
+
+    def compute_steering_angle_red ( self, x, y, img_width ):
         #dimensions of the rgb image and hsv image are same.
-        turn_angle = 0
-        center = int(img_width / 2)
-        pixels_per_bin = img_width / len(self.angles)
-        if turn_towards: # we're trying to head towards a blue square
-            turn_angle = self.angles[int( x / pixels_per_bin )]
-        else: # We need to get away from a red square
-            if x < center: # red to the left
-                turn_angle = self.angles[len(self.angles) - 1] # we want to turn to the right ASAP
-            else: # red to the right
-                turn_angle = self.angles[0] # we want to turn to the left ASAP
+        if x < center: # red to the left
+            turn_angle = self.angles[len(self.angles) - 1] # we want to turn to the right ASAP
+        else: # red to the right
+            turn_angle = self.angles[0] # we want to turn to the left ASAP
         return turn_angle
 
     def image_cb(self,data):
@@ -162,6 +215,7 @@ class RBFilter:
 def main():
     rospy.init_node('cv_module', anonymous=True)
     speed = rospy.get_param('~speed')#default val:1
+    speed = speed / 2
     min_angle = rospy.get_param('~min_angle')# Default val: -0.34
     max_angle = rospy.get_param('~max_angle')# Default val: 0.341
     angle_incr = rospy.get_param('~angle_incr')# Starting val: 0.34/3 (consider changing the denominator)
