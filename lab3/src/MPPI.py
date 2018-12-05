@@ -25,6 +25,15 @@ from vesc_msgs.msg import VescStateStamped
 class MPPIController:
 
   def __init__(self, T, K, sigma=(0.5 * torch.eye(2)), _lambda=0.5):
+    self.dtype = torch.float
+    if torch.cuda.is_available():
+      print('Running PyTorch on GPU')
+      self.device = torch.device("cuda")
+      # self.model.cuda()  # Tell Torch to run model on GPU
+    else:
+      print('Running PyTorch on CPU')
+      self.device = torch.device("cpu")
+
     self.SPEED_TO_ERPM_OFFSET = float(rospy.get_param("/vesc/speed_to_erpm_offset", 0.0))
     self.SPEED_TO_ERPM_GAIN   = float(rospy.get_param("/vesc/speed_to_erpm_gain", 4614.0))
     self.STEERING_TO_SERVO_OFFSET = float(rospy.get_param("/vesc/steering_angle_to_servo_offset", 0.5304))
@@ -38,9 +47,9 @@ class MPPIController:
     # MPPI params
     self.T = T # Length of rollout horizon
     self.K = K # Number of sample rollouts
-    self.sigma = torch.tensor([[0.001, 0.0],[0.0, 0.001]])
+    self.sigma = torch.tensor([[0.001, 0.0],[0.0, 0.001]], dtype=self.dtype, device=self.device)
     # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
-    self._lambda = _lambda
+    self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
     self.dt = None
 
     self.goal = None # Lets keep track of the goal pose (world frame) over time
@@ -60,14 +69,7 @@ class MPPIController:
 
     # model_name = rospy.get_param("~nn_model", "myneuralnetisbestneuralnet.pt")
     # self.model = torch.load(model_name)
-    self.dtype = torch.float
-    if torch.cuda.is_available():
-      print('Running PyTorch on GPU')
-      self.device = torch.device("cuda")
-      # self.model.cuda()  # Tell Torch to run model on GPU
-    else:
-      print('Running PyTorch on CPU')
-      self.device = torch.device("cpu")
+
 
     # print("Loading:", model_name)
     # print("Model:\n",self.model)
@@ -132,9 +134,9 @@ class MPPIController:
     print("SETTING Goal: ", self.goal)
 
   def compute_costs(self):
-    pose_cost = torch.zeros(self.K)
-    bounds_cost = torch.zeros(self.K)
-    ctrl_cost = torch.zeros(self.K)
+    pose_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
+    bounds_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
+    ctrl_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
 
     ### COMMENTED OUT FOR TESTING ###
     pose_cost = torch.sum((torch.abs(self.controls[:,:,1]) - self.MAX_SPEED)**2, dim=1)  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
@@ -229,7 +231,7 @@ class MPPIController:
       print("self.last_pose not yet defined!")
       return
     else:
-      self.rollouts[:, 0, :] = torch.tensor(self.last_pose)
+      self.rollouts[:, 0, :] = torch.tensor(self.last_pose, dtype=self.dtype, device=self.device)
 
     for t in xrange(1, self.T + 1):
       self.rollouts[:, t, :] = self.mm_step(self.rollouts[:, t - 1, :], self.controls[:, t - 1, :])
