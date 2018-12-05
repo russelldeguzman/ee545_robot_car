@@ -5,6 +5,10 @@
     <param name = 'min_angle' type = 'double' value='-0.34'/>
     <param name = 'max_angle' type = 'double' value='0.341'/>
     <param name = 'angle_incr' type = 'double' value='0.34'/>
+    <param name="kp" type="double" value="2"/>
+    <param name="kd" type="double" value=".5 "/>
+    <param name="ki" type="double" value=".5"/>
+    <param name="error_buff_length" type="double" value="10"/>
 	</node>
 
 </launch>

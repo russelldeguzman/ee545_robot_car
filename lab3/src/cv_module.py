@@ -142,15 +142,15 @@ class RBFilter:
             drive_msg.drive.speed = self.speed
             self.cmd_pub.publish(drive_msg)
 
-        if is_red_square_present and red_y < blue_y:
-            turn_angle = self.compute_steering_angle_red(red_x, red_y, rgb_img.shape[1])
+        elif is_red_square_present and red_y < blue_y:
+            turn_angle = self.compute_steering_angle_red(red_x, rgb_img.shape[1])
             print "Red present turn - ", turn_angle
             drive_msg.header.stamp = rospy.Time.now()
             drive_msg.header.frame_id = '/map'
             drive_msg.drive.steering_angle = turn_angle
             drive_msg.drive.speed = self.speed
             self.cmd_pub.publish(drive_msg)
-            
+
         # cv2.imshow("HSV Image", hsv)
         # cv2.imshow("BGR8 Image", rgb_img)
     def compute_steering_angle_blue(self, error):
@@ -186,7 +186,7 @@ class RBFilter:
         steering_angle = np.sign(steering_angle) * min(abs(steering_angle), np.pi / 2)
         return steering_angle
 
-    def compute_steering_angle_red ( self, x, y, img_width ):
+    def compute_steering_angle_red ( self, x, img_width ):
         #dimensions of the rgb image and hsv image are same.
         if x < center: # red to the left
             turn_angle = self.angles[len(self.angles) - 1] # we want to turn to the right ASAP
@@ -220,7 +220,11 @@ def main():
     max_angle = rospy.get_param('~max_angle')# Default val: 0.341
     angle_incr = rospy.get_param('~angle_incr')# Starting val: 0.34/3 (consider changing the denominator)
     angle_incr /= 3
-    im_filter = RBFilter(min_angle, max_angle, angle_incr, speed)
+    kp = rospy.get_param("~kp", None)
+    ki = rospy.get_param("~ki", None)
+    kd = rospy.get_param("~kd", None)
+    error_buff_length = rospy.get_param("~error_buff_length", None)
+    im_filter = RBFilter(min_angle, max_angle, angle_incr, speed, kp, ki, kd, error_buff_length)
 
     try:
         rospy.spin()
