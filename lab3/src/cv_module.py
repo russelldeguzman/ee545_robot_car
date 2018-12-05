@@ -46,7 +46,7 @@ class RBFilter:
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
         self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size= 5)
-        self.pid_err_pub = rospy.Publisher(PID_ERROR_TOPIC, Float32, queue_size = 5)       
+        self.pid_err_pub = rospy.Publisher(PID_ERROR_TOPIC, Float32, queue_size = 5)
         self.hsv_img = None
         self.mask_red = None
         self.mask_blue = None
@@ -87,7 +87,7 @@ class RBFilter:
 
         # Find the largest contour
         largest_contour = max(contours, key=lambda x:cv2.contourArea(x))
-        
+
         if  cv2.contourArea(largest_contour)> threshold:
             print "Area of largest Contour", cv2.contourArea(largest_contour)
             M = cv2.moments(largest_contour)
@@ -151,8 +151,8 @@ class RBFilter:
         self.mask_blue = cv2.dilate(self.mask_blue,kernel,iterations = 1)
         self.mask_blue  = cv2.erode(self.mask_blue, None, iterations = 2)
 
-        cv2.imshow("blue_mask", self.mask_blue)
-        cv2.imshow("red_mask", self.mask_red)
+        # cv2.imshow("blue_mask", self.mask_blue)
+        # cv2.imshow("red_mask", self.mask_red)
 
         # Adjust threshold based on output
         square_area_threshold = 300
@@ -264,7 +264,7 @@ class RBFilter:
         except CvBridgeError as e:
             print(e)
 
-        cv2.imshow("BGR8 Image", self.rgb_img)
+        # cv2.imshow("BGR8 Image", self.rgb_img)
 
         if self.handoff:
             self.area_check()
