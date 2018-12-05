@@ -31,14 +31,14 @@ class MPPIController:
     self.STEERING_TO_SERVO_GAIN   = float(rospy.get_param("/vesc/steering_angle_to_servo_gain", -1.2135))
     self.CAR_LENGTH = 0.33 
     self.OOB_COST = 100000 # Cost associated with an out-of-bounds pose
-    self.MAX_SPEED = 1.0 # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
+    self.MAX_SPEED = 5.0 # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
     self.DIST_COST_GAIN = 1000.0
 
     self.last_pose = None
     # MPPI params
     self.T = T # Length of rollout horizon
     self.K = K # Number of sample rollouts
-    self.sigma = torch.tensor([[0.001, 0.0],[0.0, 0.003]])
+    self.sigma = torch.tensor([[0.001, 0.0],[0.0, 0.001]])
     # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
     self._lambda = _lambda
     self.dt = None
@@ -75,7 +75,7 @@ class MPPIController:
     self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros(2), self.sigma)
     self.noise = torch.zeros(self.T, 2, dtype=self.dtype, device=self.device)
     self.cost = None
-
+    self.nominal_rollout = torch.zeros(self.T, 3, dtype=self.dtype, device=self.device)
     # control outputs
     self.msgid = 0
 
@@ -89,6 +89,7 @@ class MPPIController:
     self.ctrl_pub = rospy.Publisher('/vesc/high_level/ackermann_cmd_mux/input/nav_0',
             AckermannDriveStamped, queue_size=2)
     self.path_pub = rospy.Publisher("/mppi/paths", Path, queue_size = self.num_viz_paths)
+    self.nom_path_pub = rospy.Publisher("/mppi/nominal", Path, queue_size = 1)
 
     # Use the 'static_map' service (launched by MapServer.launch) to get the map
     map_service_name = rospy.get_param("~static_map", "static_map")
@@ -148,7 +149,7 @@ class MPPIController:
     ctrl_cost = torch.zeros(self.K)
 
     ### COMMENTED OUT FOR TESTING ###
-    # pose_cost = torch.sum((torch.abs(self.controls[:,:,1]) - self.MAX_SPEED)**2, dim=1)  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
+    pose_cost = torch.sum((torch.abs(self.controls[:,:,1]) - self.MAX_SPEED)**2, dim=1)  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
     ctrl_cost = self._lambda * torch.sum(torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma)) * torch.abs(self.noise), dim=(1, 2))  # This is verified to give same result as the looped code shown in the spec
 
@@ -161,14 +162,18 @@ class MPPIController:
       Utils.world_to_map(map_poses, self.map_info)  #NOTE: Clone required here since world_to_map operates in place
       map_poses = np.round(map_poses).astype(int)
       try:
-        n_in_bounds = np.sum(self.permissible_region[map_poses[:,1], map_poses[:,0]])
+        first_oob = np.argmin(self.permissible_region[map_poses[:,1], map_poses[:,0]])
+        # print("first_oob:")
+        # print(first_oob)
+        # n_in_bounds = np.sum(self.permissible_region[map_poses[:,1], map_poses[:,0]])
       except IndexError:
         bounds_cost[k] = self.OOB_COST
         continue
-      total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
-      if n_in_bounds < map_poses.shape[0]:
-        bounds_cost[k] = self.OOB_COST
-
+      # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
+      # if n_in_bounds < map_poses.shape[0]:
+      #   bounds_cost[k] = self.OOB_COST
+      if first_oob > 0:
+        bounds_cost[k] = self.OOB_COST * (self.T - first_oob)
     cart_off = self.rollouts[:, -1, :] - torch.tensor(self.goal, dtype=self.dtype, device=self.device)  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
     dist_cost = torch.tensor(self.DIST_COST_GAIN) * torch.sqrt(cart_off[:, 0]**2 + cart_off[:, 1]**2)  # Calculates magnitude of distance from goal
 
@@ -178,10 +183,19 @@ class MPPIController:
     for cost, name in zip([pose_cost, ctrl_cost, bounds_cost, dist_cost], ["pose_cost", "ctrl_cost", "bounds_cost", "dist_cost"]):
       if np.any(np.isnan(cost)):
         assert False, "NaNs in output: {}".format(name)
+      
+      if (name == "bounds_cost") and (torch.max(cost) > 0):
+        cost = cost / torch.min(cost[torch.nonzero(cost)])
+        assert torch.min(cost[torch.nonzero(cost)]) >= 1.0, "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
+        continue
 
+      cost = cost - torch.min(cost)
+      cost_max = torch.max(cost)
+      if cost_max > 0:
+        cost = cost / cost_max
       print(name)
       print(cost)
-    self.cost = pose_cost + ctrl_cost + bounds_cost + dist_cost
+    self.cost = (10 * pose_cost) + (10.0 * ctrl_cost) + (bounds_cost * 1000) + dist_cost
 
   def mm_step(self, states, controls):
     # self.state_lock.acquire()
@@ -257,7 +271,7 @@ class MPPIController:
     # python will slow down the control calculations. You should be able to keep a
     # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
     # between inferred-poses from the particle filter.
-    self.noise = self.noise_dist.rsample((self.K, self.T))  # Generates a (self.T -1)x2 matrix of noise sampled from self.noise_dist
+    self.noise = self.noise_dist.rsample((self.K, self.T))  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
     self.controls = self.nominal_control + self.noise
     self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
     self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
@@ -266,18 +280,22 @@ class MPPIController:
 
     # Perform the MPPI weighting on your calculated costs
     beta = torch.min(self.cost)
-    assert beta > 0, "Minimum cost is not > 0"
+    assert beta >= 0, "Minimum cost is < 0. beta = {}".format(beta)
+
     self.cost = self.cost - beta
     self.weights = torch.zeros_like(self.cost)
     self.weights = torch.exp((-1.0/self._lambda)*(self.cost))
     self.weights = self.weights / torch.sum(self.weights)
-
+    assert torch.abs(torch.sum(self.weights) - 1) < 1e-5, "self.weights sums to {}".format(torch.sum(self.weights))
     # Generate the new nominal control
     for t in xrange(self.T):
-      self.nominal_control[t] += torch.sum(self.noise[:, t, :] * torch.cat((self.weights.view(self.K, 1), self.weights.view(self.K, 1)), dim=1), dim=0)
+      self.nominal_control[t] = self.nominal_control[t] + torch.sum(self.noise[:, t, :] * torch.cat((self.weights.view(self.K, 1), self.weights.view(self.K, 1)), dim=1), dim=0)
+    
+    for t in xrange(self.T):
+      self.nominal_rollout[t] = torch.sum(self.rollouts[:, t, :] * self.weights.view(self.K, 1).repeat(1,3), dim=0)
 
     run_ctrl = self.nominal_control[0].clone()
-    self.nominal_control = torch.cat((self.nominal_control[1:], self.nominal_control[-1].view(1,2)))  # Rolls the array forward in time, then duplicates the last row to maintain size
+    self.nominal_control = torch.cat((self.nominal_control[1:], self.nominal_control[-1, :].view(1,2)))  # Rolls the array forward in time, then duplicates the last row to maintain size
 
     print("MPPI: %4.5f ms" % ((time.time()-t0)*1000.0))
 
@@ -339,6 +357,12 @@ class MPPIController:
       for i in range(0, self.num_viz_paths):
         pa.poses = [Utils.particle_to_posestamped(pose, frame_id) for pose in self.rollouts[i,:,:]]
         self.path_pub.publish(pa)
+    if self.nom_path_pub.get_num_connections() > 0:
+      frame_id = 'map'
+      pa = Path()
+      pa.header = Utils.make_header(frame_id)
+      pa.poses = [Utils.particle_to_posestamped(pose, frame_id) for pose in self.nominal_rollout]
+      self.nom_path_pub.publish(pa)
 
 def test_MPPI(mp, N, goal=np.array([0.,0.,0.])):
   init_input = np.array([0.,0.,0.,0.,1.,0.,0.,0.])
@@ -357,7 +381,7 @@ def test_MPPI(mp, N, goal=np.array([0.,0.,0.])):
 if __name__ == '__main__':
   rospy.init_node("mppi", anonymous=True) # Initialize the node
 
-  T = 20
+  T = 40
   K = 1024
   sigma = 0.05 # These values will need to be tuned
   _lambda = 1.0
