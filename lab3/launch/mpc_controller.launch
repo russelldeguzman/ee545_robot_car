@@ -11,7 +11,7 @@
     <param name = 'compute_time' type = 'double' value='0.09'/>
     <param name = 'laser_offset' type = 'double' value='1.0'/>
     <param name = 'laser_window' type = 'int' value='20'/>
-    <param name = 'bag_path' type = 'string' value='/home/car-user/racecar_ws/src/lab3/bags/full_car_plan.bag'/>
+    <param name = 'bag_path' type = 'string' value='/home/car-user/racecar_ws/src/ee545_robot_car/lab3/bags/full_car_plan.bag'/>
     
 	</node>
 

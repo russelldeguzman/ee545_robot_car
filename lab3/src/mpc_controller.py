@@ -107,7 +107,9 @@ class MPCController:
   def _compute_pose_angle(self, current_pose, rollout_pose):
     delta_x = rollout_pose[0] - current_pose[0]
     delta_y = rollout_pose[1] - current_pose[1]
-    return np.arctan(delta_y/delta_x)
+    angle_diff = np.arctan(delta_y/delta_x)
+    assert np.any((angle_diff <= np.pi) | (angle_diff >= -np.pi)), "angle_diff = {} (not within the range [-pi, pi])".format(angle_diff)
+    return angle_diff
 
   def idx_at_dist(self, lookahead_distance):
     dist = 0
@@ -150,7 +152,7 @@ class MPCController:
     # Distance Lookahead
    goal_idx = int (self.idx_at_dist(self.lookahead_distance) )   
 
-   if self.plan != None:
+   if self.plan is not None:
     rospy.loginfo("Goal pose from get_next_pose")
     rospy.loginfo(self.plan[goal_idx])
     return self.plan[goal_idx]
@@ -387,22 +389,22 @@ def main():
   # 'Default' values are ones that probably don't need to be changed (but you could for fun)
   # 'Starting' values are ones you should consider tuning for your system
   # YOUR CODE HERE
-  speed = rospy.get_param('~speed')# Default val: 1.0
-  speed = speed
-  min_delta = rospy.get_param('~min_delta')# Default val: -0.34
-  max_delta = rospy.get_param('~max_delta')# Default val: 0.341
-  delta_incr = rospy.get_param('~delta_incr')# Starting val: 0.34/3 (consider changing the denominator)
-  laser_window = rospy.get_param('~laser_window')# to account for car width we search a window
+  speed = rospy.get_param('~speed', 1)# Default val: 1.0
+  # speed = speed
+  min_delta = rospy.get_param('~min_delta', -0.34)# Default val: -0.34
+  max_delta = rospy.get_param('~max_delta', 0.341)# Default val: 0.341
+  delta_incr = rospy.get_param('~delta_incr', 0.34)# Starting val: 0.34/3 (consider changing the denominator)
+  laser_window = rospy.get_param('~laser_window', 20)# to account for car width we search a window
   #in the laser scan for possible collision objects Default val = 1
   delta_incr = delta_incr / 3
-  dt = rospy.get_param('~dt')# Default val: 0.01
-  T = rospy.get_param('~T')# Starting val: 300
-  compute_time = rospy.get_param('~compute_time') # Default val: 0.09
-  laser_offset = rospy.get_param('~laser_offset')# Starting val: 1.0
+  dt = rospy.get_param('~dt', 0.01)# Default val: 0.01
+  T = rospy.get_param('~T', 400)# Starting val: 300
+  compute_time = rospy.get_param('~compute_time', 0.09) # Default val: 0.09
+  laser_offset = rospy.get_param('~laser_offset', 1.0)# Starting val: 1.0
   lookahead_distance = rospy.get_param('~lookahead_dist', 2)# Default Val: 2m
   # DO NOT ADD THIS TO YOUR LAUNCH FILE, car_length is already provided by teleop.launch
   car_length = rospy.get_param("car_kinematics/car_length", 0.33)
-  bag_path = rospy.get_param('~bag_path')
+  bag_path = rospy.get_param('~bag_path', "/home/car-user/racecar_ws/src/ee545_robot_car/lab3/bags/full_car_plan.bag")
   # Generate the rollouts
   rollouts, deltas = generate_mpc_rollouts(speed, min_delta, max_delta, delta_incr, dt, T, car_length)
 
