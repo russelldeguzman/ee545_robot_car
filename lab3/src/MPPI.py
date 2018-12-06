@@ -14,6 +14,7 @@ from torch.autograd import Variable
 import rosbag
 import rospy
 import utils as Utils
+
 # from utils import describe
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import (
@@ -49,6 +50,14 @@ class MPPIController:
         self.STEERING_TO_SERVO_GAIN = float(
             rospy.get_param("/vesc/steering_angle_to_servo_gain", -1.2135)
         )
+        # self.STEER_ANGLE_MIN = float(
+        #     rospy.get_param("/vesc/steering_angle_to_servo_gain", -0.34)
+        # )
+        # self.STEER_ANGLE_MAX = float(
+        #     rospy.get_param("/vesc/steering_angle_to_servo_gain", .341)
+        # )
+        self.STEER_ANGLE_MIN = -0.34
+        self.STEER_ANGLE_MAX = 0.341
         self.CAR_LENGTH = 0.33
         self.OOB_COST = 100000  # Cost associated with an out-of-bounds pose
         self.MAX_SPEED = 5.0  # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
@@ -108,6 +117,11 @@ class MPPIController:
         )
         self.nominal_rollout = torch.zeros(
             self.T, 3, dtype=self.dtype, device=self.device
+        )
+        self.time_derate = (
+            torch.arange(start=1, end=self.T + 1, step=1, dtype=self.dtype, device=self.device)
+            .view(1, -1)
+            .repeat(self.K, 1)
         )
         # control outputs
         self.msgid = 0
@@ -218,13 +232,16 @@ class MPPIController:
             #   bounds_cost[k] = self.OOB_COST
             if first_oob > 0:
                 bounds_cost[k] = self.OOB_COST * (self.T - first_oob)
-        cart_off = self.rollouts[:, -1, :] - torch.tensor(
+        cart_off = self.rollouts[:, 1:, :] - torch.tensor(
             self.goal, dtype=self.dtype, device=self.device
         )  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
-        dist_cost = torch.tensor(self.DIST_COST_GAIN, dtype=self.dtype, device=self.device) * torch.sqrt(
-            cart_off[:, 0] ** 2 + cart_off[:, 1] ** 2
+        print('cart_off', cart_off.shape)
+        dist_cost_all = torch.sqrt(
+            cart_off[:, :, 0] ** 2 + cart_off[:, :, 1] ** 2
         )  # Calculates magnitude of distance from goal
-
+        print(dist_cost_all.shape)
+        print(self.time_derate.shape)
+        dist_cost = torch.sum(dist_cost_all * self.time_derate, dim=1)
         assert np.all(
             np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)
         ), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(
@@ -255,7 +272,6 @@ class MPPIController:
             # print(name)
             # print(cost)
         self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2 * dist_cost)
-        
 
     # def mm_step(self, states, controls):
     #     # if self.last_servo_cmd is None:
@@ -299,7 +315,7 @@ class MPPIController:
     #     return states_next
 
     def mm_step(self, states, controls):
-  
+
         # Update the proposal distribution by applying the control to each particle
         v = controls[:, 0]
         delta = controls[:, 1]
@@ -329,10 +345,14 @@ class MPPIController:
         # states[:, 0] += dx + np.random.normal(loc=0.0, scale=KM_X_FIX_NOISE+KM_X_SCALE_NOISE*v_mag, size=states.shape[0])
         states_next[:, 0] = states[:, 0] + dx
         # states[:, 1] += dy + np.random.normal(loc=0.0, scale=KM_Y_FIX_NOISE+KM_Y_SCALE_NOISE*v_mag, size=states.shape[0])
-        states_next[:, 1] = states[:,1] + dy
+        states_next[:, 1] = states[:, 1] + dy
         # states[:, 2] += dtheta + np.random.normal(loc=0.0, scale=KM_THETA_FIX_NOISE, size=states.shape[0])
-        states_next[:, 2] = ((states[:,2] + dtheta + np.pi) % (2*np.pi)) - np.pi
-        assert torch.all((states_next[:,2] <= np.pi) | (states_next[:,2] >= -np.pi)), "states_next[:,2] = {} (not within the range [-pi, pi])".format(states_next[:,2])
+        states_next[:, 2] = ((states[:, 2] + dtheta + np.pi) % (2 * np.pi)) - np.pi
+        assert torch.all(
+            (states_next[:, 2] <= np.pi) | (states_next[:, 2] >= -np.pi)
+        ), "states_next[:,2] = {} (not within the range [-pi, pi])".format(
+            states_next[:, 2]
+        )
 
         return states_next
 
@@ -382,15 +402,17 @@ class MPPIController:
             self.noise.shape[:-1]
         )  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
         # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
-        
-        print( self.nominal_control.type() )        
-        print( self.noise.type() )  
-        self.nominal_control = self.nominal_control.to('cuda')
-        print( self.nominal_control.type() )        
-        
-        self.controls = self.nominal_control.repeat(torch.Size([self.K, 1, 1]) )  + self.noise
 
-        
+        print(self.nominal_control.type())
+        print(self.noise.type())
+        # self.nominal_control = self.nominal_control.to("cuda")
+        print(self.nominal_control.type())
+
+        self.controls = (
+            self.nominal_control.repeat(torch.Size([self.K, 1, 1])) + self.noise
+        )
+        self.controls[:, :, 1] = torch.clamp(self.controls[:, :, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
+
         assert self.nominal_control.repeat(self.K, 1, 1).shape == (self.K, self.T, 2)
         self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
 
@@ -421,7 +443,7 @@ class MPPIController:
                 self.rollouts[:, t, :] * self.weights.view(self.K, 1).repeat(1, 3),
                 dim=0,
             )
-
+        self.nominal_control[:, 1] = torch.clamp(self.nominal_control[:, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
         run_ctrl = self.nominal_control[0].clone()
         self.nominal_control = torch.cat(
             (self.nominal_control[1:, :], self.nominal_control[-1, :].view(1, 2))
@@ -514,7 +536,6 @@ class MPPIController:
                 for pose in self.nominal_rollout
             ]
             self.nom_path_pub.publish(pa)
-
 
 def test_MPPI(mp, N, goal=np.array([0.0, 0.0, 0.0])):
     init_input = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
