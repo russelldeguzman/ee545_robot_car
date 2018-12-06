@@ -120,15 +120,12 @@ class KinematicMotionModel:
     noisy_KM_y = np.random.normal(0, KM_Y_FIX_NOISE, len(self.particles))
     noisy_KM_theta = np.random.normal(0, KM_THETA_FIX_NOISE, len(self.particles))
 
-    # noisy_KM_x = 0
-    # noisy_KM_y = 0
-    # noisy_KM_theta = 0
-
     #Calculate the Kinematic Model additions
     deltaTDuration = msg.header.stamp - self.last_vesc_stamp
     deltaT = deltaTDuration.to_sec()
     beta = np.arctan(np.tan(noisy_delta_array) * 0.5 )
     KM_theta = noisy_speed_array/self.CAR_LENGTH*np.sin(2*beta)*deltaT
+
     assert np.any((KM_theta <= 2*np.pi, KM_theta >= 0.0)), "KM_theta is not within the range [0, 2*pi]"
 
     # KM_theta =  np.remainder( (KM_theta_2pi + np.full((len(KM_theta_2pi),1), np.pi)), np.full((len(KM_theta_2pi),1), 2*np.pi) ) - np.full((len(KM_theta_2pi),1), np.pi)
@@ -163,6 +160,10 @@ class KinematicMotionModel:
     self.particles[:,0] = self.particles[:,0] + KM_X + noisy_KM_x
     self.particles[:,1] = self.particles[:,1] + KM_Y + noisy_KM_y
     self.particles[:,2] = self.particles[:,2] + KM_theta + noisy_KM_theta
+
+    #Limit Particle Rotation to be between -pi and pi
+    self.particles[self.particles[:,2] < -1*np.pi,2] += 2*np.pi
+    self.particles[self.particles[:,2] > np.pi,2] -= 2*np.pi
 
     # rospy.loginfo("This is the average X position of particles")
     # rospy.loginfo(np.mean(self.particles[:,0]))
