@@ -14,7 +14,7 @@ from torch.autograd import Variable
 import rosbag
 import rospy
 import utils as Utils
-from utils import describe
+# from utils import describe
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import (
     PointStamped,
@@ -59,7 +59,7 @@ class MPPIController:
         self.T = T  # Length of rollout horizon
         self.K = K  # Number of sample rollouts
         self.sigma = torch.tensor(
-            [[0.001, 0.0], [0.0, 0.001]], dtype=self.dtype, device=self.device
+            [[0.001, 0.0], [0.0, 0.01]], dtype=self.dtype, device=self.device
         )
         # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
         self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
@@ -68,7 +68,6 @@ class MPPIController:
         self.goal = None  # Lets keep track of the goal pose (world frame) over time
         self.lasttime = None
 
-        self.device = None
         self.state_lock = Lock()
 
         self.missed_msgs = 0
@@ -99,12 +98,14 @@ class MPPIController:
             self.T, 2, dtype=self.dtype, device=self.device
         )
         self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(
-            torch.zeros(2), self.sigma
+            torch.zeros(2, dtype=self.dtype, device=self.device) , self.sigma
         )
         self.noise = torch.zeros(
             self.K, self.T, 2, dtype=self.dtype, device=self.device
         )
-        self.cost = None
+        self.cost = torch.zeros(
+            self.K, dtype=self.dtype, device=self.device
+        )
         self.nominal_rollout = torch.zeros(
             self.T, 3, dtype=self.dtype, device=self.device
         )
@@ -196,7 +197,7 @@ class MPPIController:
         # TODO: Probably need a vectorized way of doing this
         for k in xrange(self.K):
             # map_poses = self.rollouts[k, :, :].clone().numpy()
-            map_poses = self.rollouts[k, :, :].numpy()
+            map_poses = self.rollouts[k, :, :].cpu().numpy()
             map_poses = map_poses.copy()
             Utils.world_to_map(
                 map_poses, self.map_info
@@ -220,7 +221,7 @@ class MPPIController:
         cart_off = self.rollouts[:, -1, :] - torch.tensor(
             self.goal, dtype=self.dtype, device=self.device
         )  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
-        dist_cost = torch.tensor(self.DIST_COST_GAIN) * torch.sqrt(
+        dist_cost = torch.tensor(self.DIST_COST_GAIN, dtype=self.dtype, device=self.device) * torch.sqrt(
             cart_off[:, 0] ** 2 + cart_off[:, 1] ** 2
         )  # Calculates magnitude of distance from goal
 
@@ -254,6 +255,7 @@ class MPPIController:
             # print(name)
             # print(cost)
         self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2 * dist_cost)
+        
 
     # def mm_step(self, states, controls):
     #     # if self.last_servo_cmd is None:
@@ -377,10 +379,18 @@ class MPPIController:
         # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
         # between inferred-poses from the particle filter.
         self.noise = self.noise_dist.rsample(
-            (self.K, self.T)
+            self.noise.shape[:-1]
         )  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
         # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
-        self.controls = self.nominal_control.repeat(self.K, 1, 1) + self.noise
+        
+        print( self.nominal_control.type() )        
+        print( self.noise.type() )  
+        self.nominal_control = self.nominal_control.to('cuda')
+        print( self.nominal_control.type() )        
+        
+        self.controls = self.nominal_control.repeat(torch.Size([self.K, 1, 1]) )  + self.noise
+
+        
         assert self.nominal_control.repeat(self.K, 1, 1).shape == (self.K, self.T, 2)
         self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
 
@@ -524,8 +534,8 @@ def test_MPPI(mp, N, goal=np.array([0.0, 0.0, 0.0])):
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node
 
-    T = 20
-    K = 512
+    T = 40
+    K = 2024
     sigma = 0.05  # These values will need to be tuned
     _lambda = 1.0
 
