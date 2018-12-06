@@ -98,7 +98,7 @@ class MPPIController:
             self.T, 2, dtype=self.dtype, device=self.device
         )
         self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(
-            torch.zeros(2, dtype=self.dtype, device=self.device) , self.sigma
+            torch.zeros(2, dtype=self.dtype, device=self.device), self.sigma
         )
         self.noise = torch.zeros(
             self.K, self.T, 2, dtype=self.dtype, device=self.device
