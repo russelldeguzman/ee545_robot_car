@@ -94,7 +94,7 @@ class MPPIController:
         )  # KxTx[x, y, theta]_map
         self.controls = torch.zeros(
             self.K, self.T, 2, dtype=self.dtype, device=self.device
-        )  # Tx[delta, speed] array of controls
+        )  # T x [speed, delta] array of controls
         self.nominal_control = torch.zeros(
             self.T, 2, dtype=self.dtype, device=self.device
         )
@@ -183,7 +183,7 @@ class MPPIController:
 
         ### COMMENTED OUT FOR TESTING ###
         pose_cost = torch.sum(
-            (torch.abs(self.controls[:, :, 1]) - self.MAX_SPEED) ** 2, dim=1
+            (torch.abs(self.controls[:, :, 0]) - self.MAX_SPEED) ** 2, dim=1
         )  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
         ctrl_cost = self._lambda * torch.sum(
@@ -256,92 +256,92 @@ class MPPIController:
         self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2 * dist_cost)
 
     # JPH mm code
-    # def mm_step(self, states, controls):
-    #   # self.state_lock.acquire()
-    #   # if self.last_servo_cmd is None:
-    #   #   self.state_lock.release()
-    #   #   return
+        # def mm_step(self, states, controls):
+        #   # if self.last_servo_cmd is None:
+        #   #   self.state_lock.release()
+        #   #   return
 
-    #   # if self.last_vesc_stamp is None:
-    #   #   self.last_vesc_stamp = msg.header.stamp
-    #   #   self.state_lock.release()
-    #   #   return
+        #   # if self.last_vesc_stamp is None:
+        #   #   self.last_vesc_stamp = msg.header.stamp
+        #   #   self.state_lock.release()
+        #   #   return
 
-    #   # #Convert the current speed and delta
-    #   # curr_speed = (msg.state.speed - self.SPEED_TO_ERPM_OFFSET)/self.SPEED_TO_ERPM_GAIN
-    #   # curr_delta = (self.last_servo_cmd - self.STEERING_TO_SERVO_OFFSET)/self.STEERING_TO_SERVO_GAIN
+        #   # #Convert the current speed and delta
+        #   # curr_speed = (msg.state.speed - self.SPEED_TO_ERPM_OFFSET)/self.SPEED_TO_ERPM_GAIN
+        #   # curr_delta = (self.last_servo_cmd - self.STEERING_TO_SERVO_OFFSET)/self.STEERING_TO_SERVO_GAIN
 
-    #   deltas = controls[:, 0]
-    #   speeds = controls[:, 1]
-    #   states_next = torch.zeros_like(states)
+        #   deltas = controls[:, 1]
+        #   speeds = controls[:, 0]
+        #   states_next = torch.zeros_like(states)
 
-    #   #Calculate the Kinematic Model additions
-    #   beta = torch.atan(torch.tan(deltas) * 0.5 )
-    #   KM_theta = speeds/self.CAR_LENGTH*torch.sin(2*beta)*self.dt
-    #   # KM_theta = ((KM_theta + np.pi) % (2*np.pi)) - np.pi # FIXME: Maybe this is wrong?
+        #   #Calculate the Kinematic Model additions
+        #   beta = torch.atan(torch.tan(deltas) * 0.5 )
+        #   KM_theta = speeds/self.CAR_LENGTH*torch.sin(2*beta)*self.dt
+        #   # KM_theta = ((KM_theta + np.pi) % (2*np.pi)) - np.pi
 
-    #   if(theta_next<0):
-    #     theta_next = 2*math.pi + theta_next
+        #   if(theta_next<0):
+        #     theta_next = 2*math.pi + theta_next
 
-    #   elif(theta_next > 2*math.pi ):
-    #     theta_next = theta_next - math.pi
+        #   elif(theta_next > 2*math.pi ):
+        #     theta_next = theta_next - math.pi
 
-    #   # assert torch.any((KM_theta <= np.pi) | (KM_theta >= -np.pi)), "KM_theta = {} (not within the range [-pi, pi])".format(KM_theta)
-    #   KM_X = self.CAR_LENGTH/torch.sin(2*beta)*(torch.sin(states[:,2] + KM_theta)-torch.sin(states[:,2]))
-    #   KM_Y = self.CAR_LENGTH/torch.sin(2*beta)*(-torch.cos(states[:,2] + KM_theta)+torch.cos(states[:,2]))
+        #   # assert torch.all((KM_theta <= np.pi) | (KM_theta >= -np.pi)), "KM_theta = {} (not within the range [-pi, pi])".format(KM_theta)
+        #   KM_X = self.CAR_LENGTH/torch.sin(2*beta)*(torch.sin(states[:,2] + KM_theta)-torch.sin(states[:,2]))
+        #   KM_Y = self.CAR_LENGTH/torch.sin(2*beta)*(-torch.cos(states[:,2] + KM_theta)+torch.cos(states[:,2]))
 
-    #   #Propogate the model forward and add noise
-    #   states_next[:,0] = states[:,0] + KM_X
-    #   states_next[:,1] = states[:,1] + KM_Y
-    #   states_next[:,2] = ((states[:,2] + KM_theta + np.pi) % (2*np.pi)) - np.pi
-    #   assert torch.any((states_next[:,2] <= np.pi) | (states_next[:,2] >= -np.pi)), "states_next[:,2] = {} (not within the range [-pi, pi])".format(KM_theta)
+        #   #Propogate the model forward and add noise
+        #   states_next[:,0] = states[:,0] + KM_X
+        #   states_next[:,1] = states[:,1] + KM_Y
+        #   states_next[:,2] = ((states[:,2] + KM_theta + np.pi) % (2*np.pi)) - np.pi
+        #   assert torch.all((states_next[:,2] <= np.pi) | (states_next[:,2] >= -np.pi)), "states_next[:,2] = {} (not within the range [-pi, pi])".format(KM_theta)
 
-    #   return states_next
-  #   # self.last_vesc_stamp = msg.header.stamp
-  #   # self.state_lock.release()
+        #   return states_next
 
-''' This is currently ported from TA's lab2 solutions for checking '''
-
-  def mm_step(self, states, controls):
+    def mm_step(self, states, controls):
   
-    # Update the proposal distribution by applying the control to each particle
+        # Update the proposal distribution by applying the control to each particle
+        v = controls[:, 0]
+        delta = controls[:, 1]
+        v_mag = torch.abs(v)
+        delta_mag = torch.abs(delta)
+        states_next = torch.zeros_like(states)
 
-        delta, v, dt = control
-        # v_mag = torch.abs(v)
-        # delta_mag = torch.abs(delta)
+        dx = torch.zeros(states.shape[0])
+        dy = torch.zeros(states.shape[0])
+        dtheta = torch.zeros(states.shape[0])
 
         # # Sample control noise and add to nominal control
         # v += np.random.normal(loc=0.0, scale=KM_V_NOISE, size=proposal_dist.shape[0])
         # delta += np.random.normal(loc=0.0, scale=KM_DELTA_NOISE, size=proposal_dist.shape[0])
-
+        zero_controls = delta_mag < 1e-3
         # Compute change in pose based on controls
-        if delta_mag < 1e-2:
-            dx = v * torch.cos(proposal_dist[:, 2]) * dt
-            dy = v * torch.sin(proposal_dist[:, 2]) * dt
-            dtheta = 0
+        if torch.any(zero_controls):
+            inds = torch.nonzero(zero_controls) # Indices where abs(steer) controls are < 1e-2
+            dx[inds] = v[inds] * torch.cos(states[inds, 2]) * self.dt
+            dy[inds] = v[inds] * torch.sin(states[inds, 2]) * self.dt
+            dtheta[inds] = 0
         else:
-            beta = torch.atan(0.5 * torch.tan(delta))
+            i = torch.nonzero(~zero_controls)  # Indices where abs(steer) controls are > 1e-2
+            beta = torch.atan(0.5 * torch.tan(delta[i]))
             sin2beta = torch.sin(2 * beta)
-            dtheta = ((v / self.CAR_LENGTH) * sin2beta) * dt
-            dx = (self.CAR_LENGTH / sin2beta) * (
-                np.sin(proposal_dist[:, 2] + dtheta) - np.sin(proposal_dist[:, 2])
+            dtheta[i] = ((v[i] / self.CAR_LENGTH) * sin2beta) * self.dt
+            dx[i] = (self.CAR_LENGTH / sin2beta) * (
+                np.sin(states[i, 2] + dtheta[i]) - np.sin(states[i, 2])
             )
-            dy = (self.CAR_LENGTH / sin2beta) * (
-                -1 * np.cos(proposal_dist[:, 2] + dtheta) + np.cos(proposal_dist[:, 2])
+            dy[i] = (self.CAR_LENGTH / sin2beta) * (
+                -1 * np.cos(states[i, 2] + dtheta[i]) + np.cos(states[i, 2])
             )
 
         # Propagate particles forward, and add sampled model noise
-        # proposal_dist[:, 0] += dx + np.random.normal(loc=0.0, scale=KM_X_FIX_NOISE+KM_X_SCALE_NOISE*v_mag, size=proposal_dist.shape[0])
-        proposal_dist[:, 0] += dx
-        # proposal_dist[:, 1] += dy + np.random.normal(loc=0.0, scale=KM_Y_FIX_NOISE+KM_Y_SCALE_NOISE*v_mag, size=proposal_dist.shape[0])
-        proposal_dist[:, 1] += dy
-        # proposal_dist[:, 2] += dtheta + np.random.normal(loc=0.0, scale=KM_THETA_FIX_NOISE, size=proposal_dist.shape[0])
-        proposal_dist[:, 2] += dtheta + np.random.normal(
-            loc=0.0, scale=KM_THETA_FIX_NOISE, size=proposal_dist.shape[0]
-        )
-        # Limit particle totation to be between -pi and pi
-        proposal_dist[proposal_dist[:, 2] < -1 * np.pi, 2] += 2 * np.pi
-        proposal_dist[proposal_dist[:, 2] > np.pi, 2] -= 2 * np.pi
+        # states[:, 0] += dx + np.random.normal(loc=0.0, scale=KM_X_FIX_NOISE+KM_X_SCALE_NOISE*v_mag, size=states.shape[0])
+        states_next[:, 0] = dx
+        # states[:, 1] += dy + np.random.normal(loc=0.0, scale=KM_Y_FIX_NOISE+KM_Y_SCALE_NOISE*v_mag, size=states.shape[0])
+        states_next[:, 1] = dy
+        # states[:, 2] += dtheta + np.random.normal(loc=0.0, scale=KM_THETA_FIX_NOISE, size=states.shape[0])
+        states_next[:, 2] = ((states_next[:,2] + dtheta + np.pi) % (2*np.pi)) - np.pi
+        assert torch.all((states_next[:,2] <= np.pi) | (states_next[:,2] >= -np.pi)), "states_next[:,2] = {} (not within the range [-pi, pi])".format(states_next[:,2])
+
+        return states_next
 
     def do_rollouts(self):
         print("Making Rollouts...")
@@ -480,7 +480,7 @@ class MPPIController:
         print(self.min_angle)
         print(self.max_angle)
 
-    def send_controls(self, steer, speed):
+    def send_controls(self, speed, steer):
         print("Speed:", speed, "Steering:", steer)
         ctrlmsg = AckermannDriveStamped()
         ctrlmsg.header = Utils.make_header("map")
