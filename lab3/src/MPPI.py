@@ -235,12 +235,12 @@ class MPPIController:
         cart_off = self.rollouts[:, 1:, :] - torch.tensor(
             self.goal, dtype=self.dtype, device=self.device
         )  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
-        print('cart_off', cart_off.shape)
+        # print('cart_off', cart_off.shape)
         dist_cost_all = torch.sqrt(
             cart_off[:, :, 0] ** 2 + cart_off[:, :, 1] ** 2
         )  # Calculates magnitude of distance from goal
-        print(dist_cost_all.shape)
-        print(self.time_derate.shape)
+        # print(dist_cost_all.shape)
+        # print(self.time_derate.shape)
         dist_cost = torch.sum(dist_cost_all * self.time_derate, dim=1)
         assert np.all(
             np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)
@@ -272,47 +272,6 @@ class MPPIController:
             # print(name)
             # print(cost)
         self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2 * dist_cost)
-
-    # def mm_step(self, states, controls):
-    #     # if self.last_servo_cmd is None:
-    #     #   self.state_lock.release()
-    #     #   return
-
-    #     # if self.last_vesc_stamp is None:
-    #     #   self.last_vesc_stamp = msg.header.stamp
-    #     #   self.state_lock.release()
-    #     #   return
-
-    #     # #Convert the current speed and delta
-    #     # curr_speed = (msg.state.speed - self.SPEED_TO_ERPM_OFFSET)/self.SPEED_TO_ERPM_GAIN
-    #     # curr_delta = (self.last_servo_cmd - self.STEERING_TO_SERVO_OFFSET)/self.STEERING_TO_SERVO_GAIN
-
-    #     deltas = controls[:, 1]
-    #     speeds = controls[:, 0]
-    #     states_next = torch.zeros_like(states)
-
-    #     #Calculate the Kinematic Model additions
-    #     beta = torch.atan(torch.tan(deltas) * 0.5 )
-    #     KM_theta = speeds/self.CAR_LENGTH*torch.sin(2*beta)*self.dt
-    #     # KM_theta = ((KM_theta + np.pi) % (2*np.pi)) - np.pi
-
-    #     # if(theta_next<0):
-    #     # theta_next = 2*math.pi + theta_next
-
-    #     # elif(theta_next > 2*math.pi ):
-    #     # theta_next = theta_next - math.pi
-
-    #     # assert torch.all((KM_theta <= np.pi) | (KM_theta >= -np.pi)), "KM_theta = {} (not within the range [-pi, pi])".format(KM_theta)
-    #     KM_X = self.CAR_LENGTH/torch.sin(2*beta)*(torch.sin(states[:,2] + KM_theta)-torch.sin(states[:,2]))
-    #     KM_Y = self.CAR_LENGTH/torch.sin(2*beta)*(-torch.cos(states[:,2] + KM_theta)+torch.cos(states[:,2]))
-
-    #     #Propogate the model forward and add noise
-    #     states_next[:,0] = states[:,0] + KM_X
-    #     states_next[:,1] = states[:,1] + KM_Y
-    #     states_next[:,2] = ((states[:,2] + KM_theta + np.pi) % (2*np.pi)) - np.pi
-    #     assert torch.all((states_next[:,2] <= np.pi) | (states_next[:,2] >= -np.pi)), "states_next[:,2] = {} (not within the range [-pi, pi])".format(KM_theta)
-
-    #     return states_next
 
     def mm_step(self, states, controls):
 
@@ -372,7 +331,7 @@ class MPPIController:
             )
         print("Done")
 
-    def mppi(self, init_pose, init_input):
+    def mppi(self, init_pose):
         t0 = time.time()
         # NOTE:
         # Network input can be:
@@ -403,10 +362,10 @@ class MPPIController:
         )  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
         # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
 
-        print(self.nominal_control.type())
-        print(self.noise.type())
+        # print(self.nominal_control.type())
+        # print(self.noise.type())
         # self.nominal_control = self.nominal_control.to("cuda")
-        print(self.nominal_control.type())
+        # print(self.nominal_control.type())
 
         self.controls = (
             self.nominal_control.repeat(torch.Size([self.K, 1, 1])) + self.noise
@@ -483,26 +442,24 @@ class MPPIController:
         timenow = msg.header.stamp.to_sec()
         self.dt = timenow - self.lasttime
         self.lasttime = timenow
-        nn_input = np.array(
-            [
-                pose_dot[0],
-                pose_dot[1],
-                pose_dot[2],
-                np.sin(theta),
-                np.cos(theta),
-                0.0,
-                0.0,
-                self.dt,
-            ]
-        )
+        # nn_input = np.array(
+        #     [
+        #         pose_dot[0],
+        #         pose_dot[1],
+        #         pose_dot[2],
+        #         np.sin(theta),
+        #         np.cos(theta),
+        #         0.0,
+        #         0.0,
+        #         self.dt,
+        #     ]
+        # )
 
-        run_ctrl = self.mppi(curr_pose, nn_input)
+        run_ctrl = self.mppi(curr_pose)
 
         self.send_controls(run_ctrl[0], run_ctrl[1])
         self.state_lock.release()
         self.visualize()
-        print(self.min_angle)
-        print(self.max_angle)
 
     def send_controls(self, speed, steer):
         print("Speed:", speed, "Steering:", steer)
@@ -517,16 +474,16 @@ class MPPIController:
     # Publish some paths to RVIZ to visualize rollouts
     def visualize(self):
         print("Running viz")
-        if self.path_pub.get_num_connections() > 0:
-            frame_id = "map"
-            pa = Path()
-            pa.header = Utils.make_header(frame_id)
-            for i in range(0, self.num_viz_paths):
-                pa.poses = [
-                    Utils.particle_to_posestamped(pose, frame_id)
-                    for pose in self.rollouts[i, :, :]
-                ]
-                self.path_pub.publish(pa)
+        # if self.path_pub.get_num_connections() > 0:
+        #     frame_id = "map"
+        #     pa = Path()
+        #     pa.header = Utils.make_header(frame_id)
+        #     for i in range(0, self.num_viz_paths):
+        #         pa.poses = [
+        #             Utils.particle_to_posestamped(pose, frame_id)
+        #             for pose in self.rollouts[i, :, :]
+        #         ]
+        #         self.path_pub.publish(pa)
         if self.nom_path_pub.get_num_connections() > 0:
             frame_id = "map"
             pa = Path()
@@ -555,7 +512,7 @@ def test_MPPI(mp, N, goal=np.array([0.0, 0.0, 0.0])):
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node
 
-    T = 40
+    T = 20
     K = 2024
     sigma = 0.05  # These values will need to be tuned
     _lambda = 1.0
