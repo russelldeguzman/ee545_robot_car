@@ -9,7 +9,7 @@
 	<arg name="laser_ray_step" default="18"/> 
 	<arg name="exclude_max_range_rays" default="true"/>
 	<arg name="max_range_meters" default="11.0" />
-	<arg name="resample_type" default="naiive" />
+	<arg name="resample_type" default="low_variance" />
 	
 	<node pkg="lab3" type="ParticleFilter.py" name="Particle_filter" output="screen">
 		<param name="n_particles" value="$(arg n_particles)"/>
