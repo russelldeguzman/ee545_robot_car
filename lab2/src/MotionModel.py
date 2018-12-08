@@ -16,13 +16,13 @@ from vesc_msgs.msg import VescStateStamped
 # YOUR CODE HERE (Set these values and use them in motion_cb)
 
 #This is the control noise that we feed into kinematic model
-KM_V_NOISE = .025 # Kinematic car velocity noise std dev
+KM_V_NOISE = .015 # Kinematic car velocity noise std dev
 KM_DELTA_NOISE = .10 # Kinematic car delta noise std dev
 
 #This is is the position and angle noise after propagating through the kinematic model
 KM_X_FIX_NOISE = .025 # Kinematic car x position constant noise std dev
 KM_Y_FIX_NOISE = .025 #2 Kinematic car y position constant noise std dev
-KM_THETA_FIX_NOISE = .025 # Kinematic car theta constant noise std dev
+KM_THETA_FIX_NOISE = .01 # Kinematic car theta constant noise std dev
 
 '''
   Propagates the particles forward based on the velocity and steering angle of the car
