@@ -11,7 +11,7 @@ import tf
 from threading import Lock
 
 from nav_msgs.srv import GetMap
-from geometry_msgs.msg import PoseStamped, PoseArray, PoseWithCovarianceStamped, PointStamped
+from geometry_msgs.msg import PoseStamped, PoseArray, PoseWithCovarianceStamped, PointStamped, Polygon, PolygonStamped
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 
@@ -22,7 +22,7 @@ from MotionModel import KinematicMotionModel
 MAP_TOPIC = "static_map"
 PUBLISH_PREFIX = '/pf/viz'
 PUBLISH_TF = True
-
+CAR_FOOTPRINT_TOPIC = "pf/viz/footprint"
 '''
   Implements particle filtering for estimating the state of the robot car
 '''
@@ -50,7 +50,7 @@ class ParticleFilter():
                motor_state_topic, servo_state_topic, scan_topic, laser_ray_step,
                exclude_max_range_rays, max_range_meters, resample_type,
                speed_to_erpm_offset, speed_to_erpm_gain, steering_angle_to_servo_offset,
-               steering_angle_to_servo_gain, car_length):
+               steering_angle_to_servo_gain, car_length, car_width):
     self.N_PARTICLES = n_particles # The number of particles
                                    # In this implementation, the total number of
                                    # particles is constant
@@ -65,6 +65,9 @@ class ParticleFilter():
     self.tfl = tf.TransformListener() # Transforms points between coordinate frames
     self.permit_coords = None
     self.N_PARTICLE_ANGLES = 8  # Number of variations in angle that will be instantiated as different particles for each sampled [x, y] coord during intialize_global
+
+    self.car_length = car_length
+    self.car_width = car_width
 
     # Get the map
     print("Getting map from service: ", MAP_TOPIC)
@@ -105,8 +108,10 @@ class ParticleFilter():
                                              car_length, self.particles, self.state_lock)
 
     # Subscribe to the '/initialpose' topic. Publised by RVIZ. See clicked_pose_cb function in this file for more info
-    self.pose_sub  = rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.clicked_pose_cb, queue_size=1)
+    self.pose_sub = rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.clicked_pose_cb, queue_size=1)
     print('Initialization complete')
+
+    self.footprint_pub = rospy.Publisher(CAR_FOOTPRINT_TOPIC, PolygonStamped, queue_size=1)
 
   '''
     Initialize the particles as uniform samples across the in-bounds regions of
@@ -201,6 +206,9 @@ class ParticleFilter():
 
     # Publish transform
     self.pub_tf.sendTransform(map_laser_pos, map_laser_rotation, stamp , "/base_link", "/map")
+
+    if self.footprint_pub.get_num_connections() > 0:
+      self.publish_footprint()
 
   '''
     Returns a 3 element numpy array representing the expected pose given the
@@ -315,6 +323,21 @@ class ParticleFilter():
     pa.poses = Utils.particles_to_poses(particles)
     self.particle_pub.publish(pa)
 
+  def publish_footprint(self):
+    # Publishes a polygon representing the car width and height. At the moment this seems to ONLY be defined as the span between all 4 wheels and does not count the front of rear bumper!
+    # print("Publishing Footprint!")
+    x = self.car_length / 2.0
+    y = self.car_width / 2.0
+    ps = PolygonStamped()
+    # ps.header = Utils.make_header('/base_footprint')
+    ps.header = Utils.make_header('/sim_pose')
+    poly = Polygon()
+    points = np.array([[x, y], [-x, y], [-x, -y], [x, -y]], dtype=np.float32)
+    points[:,0] += x
+    poly.points = Utils.points(points)
+    ps.polygon = poly
+    self.footprint_pub.publish(ps)
+
 # Suggested main
 if __name__ == '__main__':
   rospy.init_node("particle_filter", anonymous=True) # Initialize the node
@@ -334,13 +357,13 @@ if __name__ == '__main__':
   steering_angle_to_servo_offset = float(rospy.get_param("/vesc/steering_angle_to_servo_offset", 0.5)) # Offset conversion param from servo position to steering angle
   steering_angle_to_servo_gain = float(rospy.get_param("/vesc/steering_angle_to_servo_gain", -1.2135)) # Gain conversion param from servo position to steering angle
   car_length = float(rospy.get_param("/car_kinematics/car_length", 0.33)) # The length of the car
-
+  car_width = float(rospy.get_param("/car_kinematics/car_length", 0.25))
   # Create the particle filter
   pf = ParticleFilter(n_particles, n_viz_particles,
                       motor_state_topic, servo_state_topic, scan_topic, laser_ray_step,
                       exclude_max_range_rays, max_range_meters, resample_type,
                       speed_to_erpm_offset, speed_to_erpm_gain, steering_angle_to_servo_offset,
-                      steering_angle_to_servo_gain, car_length)
+                      steering_angle_to_servo_gain, car_length, car_width)
 
   while not rospy.is_shutdown(): # Keep going until we kill it
     # Callbacks are running in separate threads
