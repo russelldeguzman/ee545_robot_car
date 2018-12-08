@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import division
+
 import rospy
 import numpy as np
 import math
@@ -12,6 +14,7 @@ from collections import deque
 from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import PoseStamped, PoseArray, Pose
+from nav_msgs.msg import OccupancyGrid
 
 SCAN_TOPIC = '/scan' # The topic to subscribe to for laser scans
 CMD_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' # The topic to publish controls to
@@ -22,6 +25,7 @@ VIZ_TOPIC = '/mpc_controller/rollouts' # The topic to publish to for vizualizing
                                        # the computed rollouts. Publish a PoseArray.
 
 PLAN_PUB_TOPIC = "/planner_node/full_car_plan"
+COST_MAP_TOPIC = "/mpc_valmap/costmap"
 
 MAX_PENALTY = 10000 # The penalty to apply when a configuration in a rollout
                     # goes beyond the corresponding laser scan
@@ -65,7 +69,6 @@ class MPCController:
         self.viz_sub = rospy.Subscriber(POSE_TOPIC, PoseStamped, self.vizsub_cb) # Create a subscriber to the current position of the car
         self.plan_pub = rospy.Publisher(PLAN_PUB_TOPIC, PoseArray, queue_size=1)
         self.goal_pub = rospy.Publisher('/mpc_controller/current_goal', PoseStamped, queue_size=1)
-        # NOTE THAT THIS VIZUALIZATION WILL ONLY WORK IN SIMULATION. Why?
 
 
     # This should always return the current goal we're navigating to
@@ -311,6 +314,9 @@ def main():
     # Generate the rollouts
     rollouts, deltas = generate_mpc_rollouts(speed, min_delta, max_delta, delta_incr, dt, T, car_length)
 
+    # Define publisher for the cost map
+    cost_pub = rospy.Publisher(COST_MAP_TOPIC, OccupancyGrid, queue_size=1)
+
     # Create value map 
     map_img, map_info = utils.get_map("static_map")
 
@@ -381,17 +387,34 @@ def main():
 
     # Value Map 
     val_map = MIN_VAL_SPACE*path_map + MAX_VAL_COLLIDE*map_img_int_dilate + MIN_VAL_SPACE*path_find_map
-
+    val_map_disp = val_map.copy()
+    val_map_disp = (np.round(val_map_disp.astype(np.float) * 255 / val_map_disp.max())).astype(np.int8)
+    print(val_map_disp.min())
+    print(val_map_disp.max())
+    val_map_disp = val_map_disp.astype(np.int8)
+    print(val_map_disp.min())
+    print(val_map_disp.max())
     plt.figure(figsize=(4, 2))
     plt.axes([0, 0, 1, 1])
 
-    plt.imshow(val_map)
+    plt.imshow(val_map_disp)
     plt.axis('off')
-
+    c = plt.colorbar()
 
     plt.show()
 
-    rospy.loginfo("Value Map Generated ")
+    print(val_map_disp.shape)
+    print(val_map_disp.min())
+    print(val_map_disp.max())
+    og = OccupancyGrid()
+    og.header = utils.make_header('map')
+    og.info = map_info
+    og.data = val_map.T.flatten().astype(np.int8).tolist()
+    # og.data = val_map.flat().tolist()
+    print(type(og.data[0]))
+    cost_pub.publish(og)
+
+    print("Value Map Generated ")
     # Create the MPCControllerer
     lw = MPCController(rollouts, deltas, speed, compute_time, laser_offset, laser_window, delta_incr, lookahead_distance, val_map, map_info,scale)
 
@@ -399,7 +422,8 @@ def main():
     lw.publish_full_car_plan(plan_msg)
 
     # Keep the node alive
-    rospy.spin()
+    while not rospy.is_shutdown():
+        rospy.sleep(1)
 
 
 if __name__ == '__main__':
