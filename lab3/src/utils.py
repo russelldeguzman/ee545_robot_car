@@ -61,6 +61,14 @@ def particle_to_pose(particle):
 def particles_to_poses(particles):
     return map(particle_to_pose, particles)
 
+def particle_to_posestamped(particle, frame_id):
+    pose = PoseStamped()
+    pose.header = make_header(frame_id)
+    pose.pose.position.x = particle[0]
+    pose.pose.position.y = particle[1]
+    pose.pose.orientation = angle_to_quaternion(particle[2])
+    return pose
+
 '''
   Creates a header with the given frame_id and stamp. Default value of stamp is
   None, which results in a stamp denoting the time at which this function was called
