@@ -56,7 +56,9 @@ class RBFilter:
     (True, E) - where E is the computed error
     """
     def compute_error(self, centroid_x_pos, img_width):
-        x = (img_width / 2) - centroid_x_pos
+        x = (((img_width / 2) - centroid_x_pos) / float(img_width)) * self.max_angle
+        rospy.loginfo("error")
+        rospy.loginfo(x)
         # y = (x+320)/640*0.68 + (-0.34)
 
         return x
@@ -160,6 +162,7 @@ class RBFilter:
         red_square_present, self.red_x, self.red_y = self.is_object_present(self.mask_red, square_area_threshold, color='red')
         if red_square_present:
             cv2.circle(self.rgb_img, (self.red_x, self.red_y), 7, (255, 255, 255), -1)
+            print " Red X, Y", self.red_x, self.red_y
 
         blue_square_present, self.blue_x, self.blue_y = self.is_object_present(self.mask_blue, square_area_threshold, color='blue')
         if blue_square_present:
@@ -178,7 +181,7 @@ class RBFilter:
 
         # If both red and blue detected, deal with the one that is closer (lower y_val) first
         if red_square_present and blue_square_present:
-            if self.blue_y < self.red_y:
+            if self.blue_y > self.red_y:
                 # Blue centroid is closer than red centroid (roughly - this doesn't really factor in angled trajectories)
                 self.publish_control('blue')
             else:
@@ -223,9 +226,9 @@ class RBFilter:
         rospy.loginfo("Steering Angle")
         rospy.loginfo(steering_angle)
         self.pid_err_pub.publish(Float32(steering_angle))
-        # steering_angle = np.sign(steering_angle) * min(abs(steering_angle), self.max_angle)
-        steering_angle = np.arctan(steering_angle)*0.68/np.pi
-        assert ((steering_angle >= self.min_angle) and (steering_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(steering_angle, self.min_angle, self.max_angle)
+        steering_angle = np.sign(steering_angle) * min(abs(steering_angle), self.max_angle)
+        # steering_angle = np.arctan(steering_angle)*0.68/np.pi
+        # assert ((steering_angle >= self.min_angle) and (steering_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(steering_angle, self.min_angle, self.max_angle)
         return steering_angle
 
     def compute_steering_angle_red ( self, x, img_width ):
