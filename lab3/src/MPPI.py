@@ -457,16 +457,16 @@ class MPPIController:
     # Publish some paths to RVIZ to visualize rollouts
     def visualize(self):
         print("Running viz")
-        # if self.path_pub.get_num_connections() > 0:
-        #     frame_id = "map"
-        #     pa = Path()
-        #     pa.header = Utils.make_header(frame_id)
-        #     for i in range(0, self.num_viz_paths):
-        #         pa.poses = [
-        #             Utils.particle_to_posestamped(pose, frame_id)
-        #             for pose in self.rollouts[i, :, :]
-        #         ]
-        #         self.path_pub.publish(pa)
+        if self.path_pub.get_num_connections() > 0:
+            frame_id = "map"
+            pa = Path()
+            pa.header = Utils.make_header(frame_id)
+            for i in range(0, self.num_viz_paths):
+                pa.poses = [
+                    Utils.particle_to_posestamped(pose, frame_id)
+                    for pose in self.rollouts[i, :, :]
+                ]
+                self.path_pub.publish(pa)
         if self.nom_path_pub.get_num_connections() > 0:
             frame_id = "map"
             pa = Path()
