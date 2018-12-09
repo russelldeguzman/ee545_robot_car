@@ -70,8 +70,8 @@ class RBFilter:
         CV_MAX_HSV = [180, 255, 255]
         CV_MIN_HSV = [0, 0, 0]
 
-        HUE_SHIFT = tol[0] + 1
-        # HUE_SHIFT = 0
+        # HUE_SHIFT = tol[0] + 1
+        HUE_SHIFT = 0
         # Convert PS HSV form [0-360, 0-100, 0-100] to CV2 form [0-180, 0-255, 0-255]
         hsv_cv = np.zeros_like(hsv_samp)
         hsv_cv[0] = int(round(hsv_samp[0]/2)) - HUE_SHIFT
@@ -85,8 +85,8 @@ class RBFilter:
 
         # This is a hacky way of getting around the max red hue value wrapping around 0
         hue_shift_img = self.hsv_img.copy()
-        hue_shift_img[:,:,0] -= HUE_SHIFT
-        hue_shift_img = np.array(np.where(hue_shift_img < 0, 180 + hue_shift_img, hue_shift_img), dtype=int)
+        # hue_shift_img[:,:,0] -= HUE_SHIFT
+        # hue_shift_img = np.array(np.where(hue_shift_img[:, :, 0] < 0, 180 + hue_shift_img[:, :, 0], hue_shift_img[:, :, 0]), dtype=int)
         hsv_mask = cv2.inRange(hue_shift_img, lower_hsv, upper_hsv)
 
         return hsv_mask
@@ -107,7 +107,7 @@ class RBFilter:
         cv2.imshow("red_mask", self.mask_red)
 
         # Adjust threshold based on output
-        square_area_threshold = 100
+        square_area_threshold = 50
         # TODO - it might be better if we adjust this threshold dynamically based on either depth info from the RealSense or our best guess as to distance-to-target based on ParticleFilter
         # Dead simple version - do it as a function of the centroid height?
 
