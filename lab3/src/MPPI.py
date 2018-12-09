@@ -240,8 +240,8 @@ class MPPIController:
             [pose_cost, ctrl_cost, bounds_cost, dist_cost],
             ["pose_cost", "ctrl_cost", "bounds_cost", "dist_cost"],
         ):
-            if np.any(np.isnan(cost)):
-                assert False, "NaNs in output: {}".format(name)
+            # if np.any(np.isnan(cost)):
+            #     assert False, "NaNs in output: {}".format(name)
 
             if (name == "bounds_cost") and (torch.max(cost) > 0):
                 cost = cost / torch.min(cost[torch.nonzero(cost)])
@@ -374,9 +374,9 @@ class MPPIController:
         self.weights = torch.exp((-1.0 / self._lambda) * (self.cost))
         self.weights = self.weights / torch.sum(self.weights)
 
-        assert (
-            torch.abs(torch.sum(self.weights) - 1) < 1e-5
-        ), "self.weights sums to {} (not == 1)".format(torch.sum(self.weights))
+        # assert (
+        #     torch.abs(torch.sum(self.weights) - 1) < 1e-5
+        # ), "self.weights sums to {} (not == 1)".format(torch.sum(self.weights))
 
         # Generate the new nominal control
         self.nominal_control += torch.sum(self.noise * self.weights.view(self.K, 1, 1).repeat(1, self.T, 2), dim=0)  # This mess with self.weights is just to expand it to match self.noise [self.K x self.T x 2]
