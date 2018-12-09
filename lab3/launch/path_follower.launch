@@ -5,10 +5,10 @@
       <param name="translation_weight" type="double" value="1.0"/>
       <param name="rotation_weight" type="double" value=".5"/>
       <param name="kp" type="double" value="2"/>
-      <param name="kd" type="double" value=".5 "/>
+      <param name="kd" type="double" value=".75 "/>
       <param name="ki" type="double" value=".5"/>
       <param name="error_buff_length" type="double" value="10"/>
-      <param name="speed" type="double" value="1.0"/>   
+      <param name="speed" type="double" value="20.0"/>   
       <param name='bag_path' type = 'string' value='/home/bdtrinh/workspace/src/lab3/bags/full_car_plan.bag'/>
 
    </node>
