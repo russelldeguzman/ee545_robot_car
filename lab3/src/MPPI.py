@@ -70,7 +70,7 @@ class MPPIController:
         self.T = T  # Length of rollout horizon
         self.K = K  # Number of sample rollouts
         self.sigma = torch.tensor(
-            [[.1, 0.0], [0.0, .3]], dtype=self.dtype, device=self.device
+            [[.08, 0.0], [0.0, .05]], dtype=self.dtype, device=self.device
         )
         # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
         self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
@@ -129,7 +129,7 @@ class MPPIController:
         self.msgid = 0
 
         # visualization paramters
-        self.num_viz_paths = 40
+        self.num_viz_paths = 10
         if self.K < self.num_viz_paths:
             self.num_viz_paths = self.K
 
@@ -216,8 +216,8 @@ class MPPIController:
         map_xy = Utils.world_to_map_torch(self.rollouts[:, 1:, :].contiguous().view(-1, 3), self.map_info, self.device).view(self.K, self.T, 2)
         in_bounds = self.permissible_region[torch.clamp(map_xy[:,:, 1], 0, self.map_height - 1), torch.clamp(map_xy[:,:,0], 0, self.map_width - 1)].reshape(self.K, self.T)  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
         # print('in_bounds.shape:', in_bounds.shape)
-        # if np.any(np.invert(in_bounds)):
-        #     print('OOB Points found!')
+        if np.any(np.logical_not(in_bounds)):
+            print('{} OOB Points found!'.format(np.sum(np.logical_not(in_bounds))))
         first_oob = np.argmin(in_bounds, axis=1)
 
         # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
@@ -442,7 +442,7 @@ class MPPIController:
 
         self.send_controls(run_ctrl[0], run_ctrl[1])
         self.state_lock.release()
-        self.visualize()
+        # self.visualize()
 
     def send_controls(self, speed, steer):
         print("Speed:", speed, "Steering:", steer)
@@ -488,5 +488,6 @@ if __name__ == "__main__":
     mppi = MPPIController(T, K, sigma, _lambda)
     while not rospy.is_shutdown():  # Keep going until we kill it
         # Callbacks are running in separate threads
+        mppi.visualize()
         rospy.sleep(1)
 
