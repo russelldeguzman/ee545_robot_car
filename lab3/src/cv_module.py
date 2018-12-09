@@ -100,7 +100,7 @@ class RBFilter:
         # This is a hacky way of getting around the max red hue value wrapping around 0
         hue_shift_img = self.hsv_img.copy()
         # hue_shift_img[:,:,0] -= HUE_SHIFT
-        # hue_shift_img = np.array(np.where(hue_shift_img[:, :, 0] < 0, 180 + hue_shift_img[:, :, 0], hue_shift_img[:, :, 0]), dtype=int)
+        # hue_shift_img[:, :, 0] = np.array(np.where(hue_shift_img[:, :, 0] < 0, 180 + hue_shift_img[:, :, 0], hue_shift_img[:, :, 0]), dtype=int)
         hsv_mask = cv2.inRange(hue_shift_img, lower_hsv, upper_hsv)
 
         return hsv_mask
@@ -151,8 +151,7 @@ class RBFilter:
             error = self.compute_error(blue_x, rgb_img.shape[1] )
             turn_angle = self.compute_steering_angle_blue(error)
             print "Blue present turn - ", turn_angle
-            drive_msg.header.stamp = rospy.Time.now()
-            drive_msg.header.frame_id = '/map'
+            drive_msg.header = Utils.make_header('map')
             drive_msg.drive.steering_angle = turn_angle
             drive_msg.drive.speed = self.speed
             self.cmd_pub.publish(drive_msg)
@@ -160,9 +159,8 @@ class RBFilter:
         elif is_red_square_present:
             turn_angle = self.compute_steering_angle_red(red_x, rgb_img.shape[1])
             print "Red present turn - ", turn_angle
-            drive_msg.header.stamp = rospy.Time.now()
-            drive_msg.header.frame_id = '/map'
-            drive_msg.drive.steering_angle = float(turn_angle)
+            drive_msg.header = Utils.make_header('map')
+            drive_msg.drive.steering_angle = turn_angle
             drive_msg.drive.speed = self.speed
             self.cmd_pub.publish(drive_msg)
 
@@ -199,6 +197,7 @@ class RBFilter:
         rospy.loginfo("Steering Angle")
         rospy.loginfo(steering_angle)
         steering_angle = np.sign(steering_angle) * min(abs(steering_angle), np.pi / 2)
+        assert ((turn_angle >= self.min_angle) and (turn_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(turn_angle, self.min_angle, self.max_angle)
         return steering_angle
 
     def compute_steering_angle_red ( self, x, img_width ):
@@ -207,6 +206,7 @@ class RBFilter:
             turn_angle = self.angles[len(self.angles) - 1] # we want to turn to the right ASAP
         else: # red to the right
             turn_angle = self.angles[0] # we want to turn to the left ASAP
+        assert ((turn_angle >= self.min_angle) and (turn_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(turn_angle, self.min_angle, self.max_angle)
         return turn_angle
 
     def image_cb(self,data):
@@ -242,10 +242,8 @@ def main():
     error_buff_length = rospy.get_param("~error_buff_length", None)
     im_filter = RBFilter(min_angle, max_angle, angle_incr, speed, kp, ki, kd, error_buff_length)
 
-    try:
-        rospy.spin()
-    except KeyboardInterrupt:
-        print ('Shutting down')
+    while not rospy.is_shutdown():
+        rospy.sleep(1)
 
     cv2.destroyAllWindows()
 
