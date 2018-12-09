@@ -107,7 +107,7 @@ class MPPIController:
             self.T, 2, dtype=self.dtype, device=self.device
         )
         self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(
-            torch.zeros(2, dtype=self.dtype, device='cpu'), self.sigma.cpu()
+            torch.zeros(2, dtype=self.dtype, device=self.device), scale_tril=self.sigma
         )
         self.noise = torch.zeros(
             self.K, self.T, 2, dtype=self.dtype, device=self.device
@@ -358,8 +358,8 @@ class MPPIController:
         # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
         # between inferred-poses from the particle filter.
         self.noise = self.noise_dist.rsample(
-            (self.K, self.T)
-        ).cuda()  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
+            torch.size([self.K, self.T])
+        )  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
         # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
 
         # print(self.nominal_control.type())
@@ -432,8 +432,6 @@ class MPPIController:
             return
 
         theta = Utils.quaternion_to_angle(msg.pose.orientation)
-        self.min_angle = min(theta, self.min_angle)
-        self.max_angle = max(theta, self.max_angle)
         curr_pose = np.array([msg.pose.position.x, msg.pose.position.y, theta])
 
         pose_dot = curr_pose - self.last_pose  # get state
@@ -493,21 +491,6 @@ class MPPIController:
                 for pose in self.nominal_rollout
             ]
             self.nom_path_pub.publish(pa)
-
-def test_MPPI(mp, N, goal=np.array([0.0, 0.0, 0.0])):
-    init_input = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-    pose = np.array([0.0, 0.0, 0.0])
-    mp.goal = goal
-    print("Start:", pose)
-    mp.ctrl.zero_()
-    last_pose = np.array([0.0, 0.0, 0.0])
-    for i in range(0, N):
-        # ROLLOUT your MPPI function to go from a known location to a specified
-        # goal pose. Convince yourself that it works.
-
-        print("Now:", pose)
-    print("End:", pose)
-
 
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node
