@@ -49,21 +49,35 @@ class RBFilter:
     def compute_error(self, centroid_x_pos, img_width):
         return (img_width / 2) - centroid_x_pos
 
+    # def is_object_present(self, mask, threshold):
+    #     _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+    #     if len(contours ) == 0:
+    #         return False, 0, 0
+
+    #     # Find the largest contour
+    #     largest_contour = max(contours, key=lambda x:cv2.contourArea(x))
+    #     if cv2.contourArea(largest_contour) > threshold:
+    #         M = cv2.moments(largest_contour)
+    #         cX = int(M["m10"] / M["m00"])
+    #         cY = int(M["m01"] / M["m00"])
+    #         return True, cX, cY
+
+    #     return False, 0, 0
+
     def is_object_present(self, mask, threshold):
-        _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-
-        if len(contours ) == 0:
-            return False, 0, 0
-
-        # Find the largest contour
-        largest_contour = max(contours, key=lambda x:cv2.contourArea(x))
-        if cv2.contourArea(largest_contour) > threshold:
-            M = cv2.moments(largest_contour)
+    #_, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        M = cv2.moments(mask)
+        if M["m00"] != 0:
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
-            return True, cX, cY
+            self.center = [cX, cY]
+            return True, cX, cY 
+        else:
+            cX, cY = 0,0
+            self.center = [cX, cY]
+            return False, cX, cY
 
-        return False, 0, 0
 
     def hsv_thresh(self, hsv_samp, tol=[5, 25, 25]):
         # Define HSV Parameter bounds for CV2
@@ -103,6 +117,15 @@ class RBFilter:
         self.mask_red = self.hsv_thresh(red_samp, RED_TOL)
         self.mask_blue = self.hsv_thresh(blue_samp, BLUE_TOL)
         drive_msg = AckermannDriveStamped()
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
+        
+        self.mask_red = cv2.morphologyEx(self.mask_red, cv2.MORPH_CLOSE, kernel)
+        self.mask_red = cv2.dilate(self.mask_red,kernel,iterations = 1)     
+        
+        self.mask_blue = cv2.morphologyEx(self.mask_blue, cv2.MORPH_CLOSE, kernel)
+        self.mask_blue = cv2.dilate(self.mask_blue,kernel,iterations = 1)   
+
         cv2.imshow("blue_mask", self.mask_blue)
         cv2.imshow("red_mask", self.mask_red)
 
@@ -117,12 +140,14 @@ class RBFilter:
         is_blue_square_present, blue_x, blue_y = self.is_object_present(self.mask_blue, square_area_threshold)
         cv2.circle(rgb_img, (blue_x, blue_y), 7, (255, 255, 255), -1)
 
+        if(is_red_square_present):
+            print "Red present"
         #Now order of precedence would be for red over blue
 
         # if is_blue_square_present and is_red_square_present:
         #     print "Both Blue and red present"
 
-        if is_blue_square_present and blue_y < red_y:
+        if is_blue_square_present and (blue_y < red_y or not blue_y ):
             error = self.compute_error(blue_x, rgb_img.shape[1] )
             turn_angle = self.compute_steering_angle_blue(error)
             print "Blue present turn - ", turn_angle
@@ -132,12 +157,12 @@ class RBFilter:
             drive_msg.drive.speed = self.speed
             self.cmd_pub.publish(drive_msg)
 
-        elif is_red_square_present and red_y < blue_y:
+        elif is_red_square_present:
             turn_angle = self.compute_steering_angle_red(red_x, rgb_img.shape[1])
             print "Red present turn - ", turn_angle
             drive_msg.header.stamp = rospy.Time.now()
             drive_msg.header.frame_id = '/map'
-            drive_msg.drive.steering_angle = turn_angle
+            drive_msg.drive.steering_angle = float(turn_angle)
             drive_msg.drive.speed = self.speed
             self.cmd_pub.publish(drive_msg)
 
@@ -178,7 +203,7 @@ class RBFilter:
 
     def compute_steering_angle_red ( self, x, img_width ):
         #dimensions of the rgb image and hsv image are same.
-        if x < center: # red to the left
+        if x < self.center[0]: # red to the left
             turn_angle = self.angles[len(self.angles) - 1] # we want to turn to the right ASAP
         else: # red to the right
             turn_angle = self.angles[0] # we want to turn to the left ASAP
@@ -205,7 +230,8 @@ class RBFilter:
 def main():
     rospy.init_node('cv_module', anonymous=True)
     speed = rospy.get_param('~speed')#default val:1
-    speed = speed / 2
+    speed = speed / 2.0
+    print speed
     min_angle = rospy.get_param('~min_angle')# Default val: -0.34
     max_angle = rospy.get_param('~max_angle')# Default val: 0.341
     angle_incr = rospy.get_param('~angle_incr')# Starting val: 0.34/3 (consider changing the denominator)
