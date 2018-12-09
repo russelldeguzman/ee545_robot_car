@@ -14,14 +14,15 @@ import math
 from ackermann_msgs.msg import AckermannDriveStamped
 from cv_bridge import CvBridge, CvBridgeError
 from collections import deque
+from std_msgs.msg import Float32
 
 IMAGE_TOPIC = '/camera/color/image_raw'
 CMD_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' # The topic to publish controls to
 IMGPUB_TOPIC = '/cv_module/image_op'
+PID_ERROR_TOPIC = '/cv_module/piderror'
 
 class RBFilter:
     def __init__(self, min_angle, max_angle, angle_incr,speed, kp, ki, kd, error_buff_length):
-
         # Storing Params if needed
         self.min_angle = min_angle
         self.max_angle = max_angle
@@ -43,10 +44,10 @@ class RBFilter:
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
         self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size= 5)
+        self.pid_err_pub = rospy.Publisher(PID_ERROR_TOPIC, Float32, queue_size = 5)
         self.hsv_img = None
         self.mask_red = None
         self.mask_blue = None
-        
 
     """
     Computes the error based on the current pose of the car
@@ -56,7 +57,7 @@ class RBFilter:
     """
     def compute_error(self, centroid_x_pos, img_width):
         x = (img_width / 2) - centroid_x_pos
-        # y = (x+320)/640*0.68 + (-0.34)   
+        # y = (x+320)/640*0.68 + (-0.34)
 
         return x
 
@@ -78,7 +79,7 @@ class RBFilter:
 
     def is_object_present(self, mask, threshold, color):
         """[summary]
-        
+
         Arguments:
             mask {[type]} -- [description]
             threshold {[type]} -- [description]
@@ -92,7 +93,7 @@ class RBFilter:
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
             self.center[color] = [cX, cY]
-            return True, cX, cY 
+            return True, cX, cY
         else:
             cX, cY = None, None
             self.center[color] = [cX, cY]
@@ -130,20 +131,23 @@ class RBFilter:
         red_samp = np.mean([[355, 40, 100], [355, 35, 100], [338, 25, 100], [356,58,100]], axis=0) # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
         # red_rollover =[2, 28,100]
 
-        BLUE_TOL = [10, 50, 50]   # Blue hue tolerance
-        RED_TOL = [10, 50, 20]  # Red hue tolerance
 
+        BLUE_TOL = [40, 90, 90]   # Blue hue tolerance
+        RED_TOL = [40, 90, 60]  # Red hue tolerance
+        self.rgb_img = cv2.GaussianBlur(self.rgb_img,(11,11),0)
         self.hsv_img = cv2.cvtColor(self.rgb_img, cv2.COLOR_BGR2HSV)
         self.mask_red = self.hsv_thresh(red_samp, RED_TOL)
         self.mask_blue = self.hsv_thresh(blue_samp, BLUE_TOL)
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
-        
+
         self.mask_red = cv2.morphologyEx(self.mask_red, cv2.MORPH_CLOSE, kernel)
-        self.mask_red = cv2.dilate(self.mask_red,kernel,iterations = 1)     
-        
+        self.mask_red = cv2.dilate(self.mask_red,kernel,iterations = 1)
+        self.mask_red  = cv2.erode(self.mask_red, None, iterations = 2)
+
         self.mask_blue = cv2.morphologyEx(self.mask_blue, cv2.MORPH_CLOSE, kernel)
-        self.mask_blue = cv2.dilate(self.mask_blue,kernel,iterations = 1)   
+        self.mask_blue = cv2.dilate(self.mask_blue,kernel,iterations = 1)
+        self.mask_blue  = cv2.erode(self.mask_blue, None, iterations = 2)
 
         cv2.imshow("blue_mask", self.mask_blue)
         cv2.imshow("red_mask", self.mask_red)
@@ -182,7 +186,7 @@ class RBFilter:
         # elif red is detected, use that controller
         elif red_square_present:
             self.publish_control('red')
-        # elif blue is detected, use that controller    
+        # elif blue is detected, use that controller
         elif blue_square_present:
             self.publish_control('blue')
 
@@ -218,7 +222,7 @@ class RBFilter:
         steering_angle = self.kp * error + self.ki * integ_error + self.kd * deriv_error
         rospy.loginfo("Steering Angle")
         rospy.loginfo(steering_angle)
-        
+        self.pid_err_pub.publish(Float32(steering_angle))
         # steering_angle = np.sign(steering_angle) * min(abs(steering_angle), self.max_angle)
         steering_angle = np.arctan(steering_angle)*0.68/np.pi
         assert ((steering_angle >= self.min_angle) and (steering_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(steering_angle, self.min_angle, self.max_angle)
