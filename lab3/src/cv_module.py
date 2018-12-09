@@ -21,6 +21,7 @@ IMGPUB_TOPIC = '/cv_module/image_op'
 
 class RBFilter:
     def __init__(self, min_angle, max_angle, angle_incr,speed, kp, ki, kd, error_buff_length):
+
         # Storing Params if needed
         self.min_angle = min_angle
         self.max_angle = max_angle
@@ -54,7 +55,10 @@ class RBFilter:
     (True, E) - where E is the computed error
     """
     def compute_error(self, centroid_x_pos, img_width):
-        return (img_width / 2) - centroid_x_pos
+        x = (img_width / 2) - centroid_x_pos
+        # y = (x+320)/640*0.68 + (-0.34)   
+
+        return x
 
     # def is_object_present(self, mask, threshold):
     #     _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -126,7 +130,7 @@ class RBFilter:
         red_samp = np.mean([[355, 40, 100], [355, 35, 100], [338, 25, 100], [356,58,100]], axis=0) # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
         # red_rollover =[2, 28,100]
 
-        BLUE_TOL = [10, 50, 20]   # Blue hue tolerance
+        BLUE_TOL = [10, 50, 50]   # Blue hue tolerance
         RED_TOL = [10, 50, 20]  # Red hue tolerance
 
         self.hsv_img = cv2.cvtColor(self.rgb_img, cv2.COLOR_BGR2HSV)
@@ -156,9 +160,13 @@ class RBFilter:
         blue_square_present, self.blue_x, self.blue_y = self.is_object_present(self.mask_blue, square_area_threshold, color='blue')
         if blue_square_present:
             cv2.circle(self.rgb_img, (self.blue_x, self.blue_y), 7, (255, 255, 255), -1)
+            print " Blue X, Y", self.blue_x, self.blue_y
 
         if(red_square_present):
             print "Red present"
+
+        if(blue_square_present):
+            print "Blue present"
         #Now order of precedence would be for red over blue
 
         # if is_blue_square_present and is_red_square_present:
@@ -210,8 +218,10 @@ class RBFilter:
         steering_angle = self.kp * error + self.ki * integ_error + self.kd * deriv_error
         rospy.loginfo("Steering Angle")
         rospy.loginfo(steering_angle)
-        steering_angle = np.sign(steering_angle) * min(abs(steering_angle), np.pi / 2)
-        assert ((turn_angle >= self.min_angle) and (turn_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(turn_angle, self.min_angle, self.max_angle)
+        
+        # steering_angle = np.sign(steering_angle) * min(abs(steering_angle), self.max_angle)
+        steering_angle = np.arctan(steering_angle)*0.68/np.pi
+        assert ((steering_angle >= self.min_angle) and (steering_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(steering_angle, self.min_angle, self.max_angle)
         return steering_angle
 
     def compute_steering_angle_red ( self, x, img_width ):
