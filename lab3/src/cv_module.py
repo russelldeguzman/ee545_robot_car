@@ -32,6 +32,7 @@ class RBFilter:
         self.kd = kd
         self.bridge = CvBridge()
         self.error_buff = deque(maxlen=error_buff_length)
+        self.center = dict()
         #Publisher, Subscribers
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
@@ -39,6 +40,7 @@ class RBFilter:
         self.hsv_img = None
         self.mask_red = None
         self.mask_blue = None
+        
 
     """
     Computes the error based on the current pose of the car
@@ -65,17 +67,26 @@ class RBFilter:
 
     #     return False, 0, 0
 
-    def is_object_present(self, mask, threshold):
+    def is_object_present(self, mask, threshold, color):
+        """[summary]
+        
+        Arguments:
+            mask {[type]} -- [description]
+            threshold {[type]} -- [description]
+            color {str} -- Either 'red' or 'blue'
+        """
+
+        # TODO: Fix self.center for case when red and blue are detected at once
     #_, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         M = cv2.moments(mask)
         if M["m00"] != 0:
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
-            self.center = [cX, cY]
+            self.center(color) = [cX, cY]
             return True, cX, cY 
         else:
-            cX, cY = 0,0
-            self.center = [cX, cY]
+            cX, cY = None, None
+            self.center(color) = [cX, cY]
             return False, cX, cY
 
 
@@ -134,35 +145,32 @@ class RBFilter:
         # TODO - it might be better if we adjust this threshold dynamically based on either depth info from the RealSense or our best guess as to distance-to-target based on ParticleFilter
         # Dead simple version - do it as a function of the centroid height?
 
-        is_red_square_present, red_x, red_y = self.is_object_present(self.mask_red, square_area_threshold)
+        red_square_present, red_x, red_y = self.is_object_present(self.mask_red, square_area_threshold, color='red')
         cv2.circle(rgb_img, (red_x, red_y), 7, (255, 255, 255), -1)
 
-        is_blue_square_present, blue_x, blue_y = self.is_object_present(self.mask_blue, square_area_threshold)
+        blue_square_present, blue_x, blue_y = self.is_object_present(self.mask_blue, square_area_threshold, color='blue')
         cv2.circle(rgb_img, (blue_x, blue_y), 7, (255, 255, 255), -1)
 
-        if(is_red_square_present):
+        if(red_square_present):
             print "Red present"
         #Now order of precedence would be for red over blue
 
         # if is_blue_square_present and is_red_square_present:
         #     print "Both Blue and red present"
 
-        if is_blue_square_present and (blue_y < red_y or not blue_y ):
-            error = self.compute_error(blue_x, rgb_img.shape[1] )
-            turn_angle = self.compute_steering_angle_blue(error)
-            print "Blue present turn - ", turn_angle
-            drive_msg.header = Utils.make_header('map')
-            drive_msg.drive.steering_angle = turn_angle
-            drive_msg.drive.speed = self.speed
-            self.cmd_pub.publish(drive_msg)
-
-        elif is_red_square_present:
-            turn_angle = self.compute_steering_angle_red(red_x, rgb_img.shape[1])
-            print "Red present turn - ", turn_angle
-            drive_msg.header = Utils.make_header('map')
-            drive_msg.drive.steering_angle = turn_angle
-            drive_msg.drive.speed = self.speed
-            self.cmd_pub.publish(drive_msg)
+        # If both red and blue detected, deal with the one that is closer (lower y_val) first
+        if red_square_present and blue_square_present:
+            if blue_y < red_y:
+                # Blue centroid is closer than red centroid (roughly - this doesn't really factor in angled trajectories)
+                self.publish_control('blue')
+            else:
+                self.publish_control('red')
+        # elif red is detected, use that controller
+        elif red_square_present:
+            self.publish_control('red')
+        # elif blue is detected, use that controller    
+        elif blue_square_present:
+            self.publish_control('blue')
 
         # cv2.imshow("HSV Image", hsv)
         # cv2.imshow("BGR8 Image", rgb_img)
@@ -202,12 +210,28 @@ class RBFilter:
 
     def compute_steering_angle_red ( self, x, img_width ):
         #dimensions of the rgb image and hsv image are same.
-        if x < self.center[0]: # red to the left
-            turn_angle = self.angles[len(self.angles) - 1] # we want to turn to the right ASAP
+        if x < self.center['red'][0]: # red to the left
+            turn_angle = self.angles[-1] # we want to turn to the right ASAP
         else: # red to the right
             turn_angle = self.angles[0] # we want to turn to the left ASAP
         assert ((turn_angle >= self.min_angle) and (turn_angle <= self.max_angle)), "turn_angle = {}, outside range [{}, {}]".format(turn_angle, self.min_angle, self.max_angle)
         return turn_angle
+
+    def publish_control(self, color):
+        if color is 'red':
+            turn_angle = self.compute_steering_angle_red(red_x, rgb_img.shape[1])
+            print "Red present, turn - ", turn_angle
+
+        elif color is 'blue':
+            error = self.compute_error(blue_x, rgb_img.shape[1])
+            turn_angle = self.compute_steering_angle_blue(error)
+            print "Blue present, turn - ", turn_angle
+        else:
+            raise ColorNotSpecified('Argument \'color\' was not one of [\'red\', \'blue\']')
+        drive_msg.header = Utils.make_header('map')
+        drive_msg.drive.steering_angle = turn_angle
+        drive_msg.drive.speed = self.speed
+        self.cmd_pub.publish(drive_msg)
 
     def image_cb(self,data):
         # print('callback')
