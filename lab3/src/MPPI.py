@@ -204,7 +204,7 @@ class MPPIController:
         ctrl_cost = self._lambda * torch.sum(
             torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma))
             * torch.abs(self.noise),
-            dim=(1, 2),
+            dim=(1, 2)
         )  # This is verified to give same result as the looped code shown in the spec
 
         total_in_bounds = 0
