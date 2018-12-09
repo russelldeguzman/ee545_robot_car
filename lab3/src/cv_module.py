@@ -20,6 +20,7 @@ IMAGE_TOPIC = '/camera/color/image_raw'
 CMD_TOPIC = '/vesc/high_level/ackermann_cmd_mux/input/nav_0' # The topic to publish controls to
 IMGPUB_TOPIC = '/cv_module/image_op'
 PID_ERROR_TOPIC = '/cv_module/piderror'
+HANDOFF_TOPIC = "controller/handoff"
 
 class RBFilter:
     def __init__(self, min_angle, max_angle, angle_incr,speed, kp, ki, kd, error_buff_length):
@@ -41,13 +42,19 @@ class RBFilter:
         self.blue_y = None
         self.rgb_img = None
         #Publisher, Subscribers
+        self.handoff_sub = rospy.Subscriber(HANDOFF_TOPIC, bool, self.handoff_cb)
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
         self.cmd_pub = rospy.Publisher(CMD_TOPIC, AckermannDriveStamped, queue_size= 5)
-        self.pid_err_pub = rospy.Publisher(PID_ERROR_TOPIC, Float32, queue_size = 5)
+        self.pid_err_pub = rospy.Publisher(PID_ERROR_TOPIC, Float32, queue_size = 5)       
         self.hsv_img = None
         self.mask_red = None
         self.mask_blue = None
+        #For Testing set self.handoff = True
+        self.handoff = False
+
+    def handoff_cb(self, msg):
+        self.handoff = msg
 
     """
     Computes the error based on the current pose of the car
@@ -63,22 +70,6 @@ class RBFilter:
 
         return x
 
-    # def is_object_present(self, mask, threshold):
-    #     _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-
-    #     if len(contours ) == 0:
-    #         return False, 0, 0
-
-    #     # Find the largest contour
-    #     largest_contour = max(contours, key=lambda x:cv2.contourArea(x))
-    #     if cv2.contourArea(largest_contour) > threshold:
-    #         M = cv2.moments(largest_contour)
-    #         cX = int(M["m10"] / M["m00"])
-    #         cY = int(M["m01"] / M["m00"])
-    #         return True, cX, cY
-
-    #     return False, 0, 0
-
     def is_object_present(self, mask, threshold, color):
         """[summary]
 
@@ -89,17 +80,26 @@ class RBFilter:
         """
 
         # TODO: Fix self.center for case when red and blue are detected at once
-    #_, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        M = cv2.moments(mask)
-        if M["m00"] != 0:
-            cX = int(M["m10"] / M["m00"])
-            cY = int(M["m01"] / M["m00"])
-            self.center[color] = [cX, cY]
-            return True, cX, cY
-        else:
-            cX, cY = None, None
-            self.center[color] = [cX, cY]
-            return False, cX, cY
+        _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+        if len(contours ) == 0:
+            return False, 0, 0
+
+        # Find the largest contour
+        largest_contour = max(contours, key=lambda x:cv2.contourArea(x))
+        
+        if  cv2.contourArea(largest_contour)> threshold:
+            print "Area of largest Contour", cv2.contourArea(largest_contour)
+            M = cv2.moments(largest_contour)
+            if M["m00"] != 0:
+                cX = int(M["m10"] / M["m00"])
+                cY = int(M["m01"] / M["m00"])
+                self.center[color] = [cX, cY]
+                return True, cX, cY
+            else:
+                cX, cY = None, None
+                self.center[color] = [cX, cY]
+                return False, cX, cY
 
 
     def hsv_thresh(self, hsv_samp, tol=[5, 25, 25]):
@@ -155,7 +155,7 @@ class RBFilter:
         cv2.imshow("red_mask", self.mask_red)
 
         # Adjust threshold based on output
-        square_area_threshold = 50
+        square_area_threshold = 300
         # TODO - it might be better if we adjust this threshold dynamically based on either depth info from the RealSense or our best guess as to distance-to-target based on ParticleFilter
         # Dead simple version - do it as a function of the centroid height?
 
@@ -175,9 +175,6 @@ class RBFilter:
         if(blue_square_present):
             print "Blue present"
         #Now order of precedence would be for red over blue
-
-        # if is_blue_square_present and is_red_square_present:
-        #     print "Both Blue and red present"
 
         # If both red and blue detected, deal with the one that is closer (lower y_val) first
         if red_square_present and blue_square_present:
@@ -267,9 +264,11 @@ class RBFilter:
         except CvBridgeError as e:
             print(e)
 
-        self.area_check()
-
         cv2.imshow("BGR8 Image", self.rgb_img)
+
+        if self.handoff:
+            self.area_check()
+
         cv2.waitKey(3)
 
         if self.img_pub.get_num_connections() > 0:
