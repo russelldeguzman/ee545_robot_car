@@ -182,7 +182,7 @@ Convert array of poses in the world to pixel locations in the map image
   map_info: Info about the map (returned by get_map)
 '''    
 def world_to_map_torch(poses, map_info, device):
-    map_poses = poses[:-1].clone()
+    map_poses = poses[:, :2].clone()
     scale = torch.tensor(map_info.resolution, dtype=torch.float, device=device)
     angle = torch.tensor(-quaternion_to_angle(map_info.origin.orientation), dtype=torch.float, device=device)
 
@@ -194,7 +194,7 @@ def world_to_map_torch(poses, map_info, device):
     world_poses = torch.div(map_poses, scale)
 
     if angle == 0:
-      map_poses = map_poses.type('torch.int')
+      map_poses = map_poses.type(dtype=torch.int32)
       return map_poses
 
     # Rotation
@@ -204,7 +204,7 @@ def world_to_map_torch(poses, map_info, device):
     temp = poses[:,0].clone()
     map_poses[:,0] = c*poses[:,0] - s*poses[:,1]
     map_poses[:,1] = s*temp       + c*poses[:,1]
-    map_poses = map_poses.type('torch.int')
+    map_poses = map_poses.type(torch.tensor([], dtype=torch.int32, device=device))
     return map_poses
 
 def describe(var_list):
