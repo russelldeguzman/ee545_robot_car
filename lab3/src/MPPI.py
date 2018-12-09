@@ -68,7 +68,7 @@ class MPPIController:
         self.T = T  # Length of rollout horizon
         self.K = K  # Number of sample rollouts
         self.sigma = torch.tensor(
-            [[0.001, 0.0], [0.0, 0.01]], dtype=self.dtype, device=self.device
+            [[.1, 0.0], [0.0, .1]], dtype=self.dtype, device=self.device
         )
         # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
         self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
@@ -207,31 +207,16 @@ class MPPIController:
             dim=2
         ), dim=1) # This is verified to give same result as the looped code shown in the spec
 
-        total_in_bounds = 0
-        # TODO: Probably need a vectorized way of doing this
-        for k in xrange(self.K):
-            # map_poses = self.rollouts[k, :, :].clone().numpy()
-            map_poses = self.rollouts[k, :, :].cpu().numpy()
-            map_poses = map_poses.copy()
-            Utils.world_to_map(
-                map_poses, self.map_info
-            )  # NOTE: Clone required here since world_to_map operates in place
-            map_poses = np.round(map_poses).astype(int)
-            try:
-                first_oob = np.argmin(
-                    self.permissible_region[map_poses[:, 1], map_poses[:, 0]]
-                )
-                # print("first_oob:")
-                # print(first_oob)
-                # n_in_bounds = np.sum(self.permissible_region[map_poses[:,1], map_poses[:,0]])
-            except IndexError:
-                bounds_cost[k] = self.OOB_COST
-                continue
-            # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
-            # if n_in_bounds < map_poses.shape[0]:
-            #   bounds_cost[k] = self.OOB_COST
-            if first_oob > 0:
-                bounds_cost[k] = self.OOB_COST * (self.T - first_oob)
+        map_xy = Utils.world_to_map_torch(self.rollouts[:, 1:, :].contiguous().view(-1, 3), self.map_info, self.device).view(self.K, self.T, 2)
+        in_bounds = self.permissible_region[torch.clamp(map_xy[:,:, 1], 0, self.map_height - 1), torch.clamp(map_xy[:,:,0], 0, self.map_width - 1)].reshape(self.K, self.T)  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
+        print(in_bounds.shape)
+        first_oob = np.argmin(in_bounds, axis=1)
+
+        # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
+        # if n_in_bounds < map_poses.shape[0]:
+        #   bounds_cost[k] = self.OOB_COST
+        bounds_cost = torch.tensor(np.where(first_oob > 0, self.OOB_COST * (self.T - first_oob), bounds_cost), dtype=self.dtype, device=self.device)
+
         cart_off = self.rollouts[:, 1:, :] - torch.tensor(
             self.goal, dtype=self.dtype, device=self.device
         )  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
@@ -253,24 +238,24 @@ class MPPIController:
             [pose_cost, ctrl_cost, bounds_cost, dist_cost],
             ["pose_cost", "ctrl_cost", "bounds_cost", "dist_cost"],
         ):
-            # if np.any(np.isnan(cost)):
-            #     assert False, "NaNs in output: {}".format(name)
+            if np.any(np.isnan(cost)):
+                assert False, "NaNs in output: {}".format(name)
 
             if (name == "bounds_cost") and (torch.max(cost) > 0):
                 cost = cost / torch.min(cost[torch.nonzero(cost)])
                 assert (
                     torch.min(cost[torch.nonzero(cost)]) >= 1.0
                 ), "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
-                # print(name)
-                # print(cost)
+                print(name)
+                print(cost)
                 continue
 
             cost = cost - torch.min(cost)
             cost_max = torch.max(cost)
             if cost_max > 0:
                 cost = cost / cost_max
-            # print(name)
-            # print(cost)
+            print(name)
+            print(cost)
         self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2 * dist_cost)
 
     def mm_step(self, states, controls):
@@ -331,7 +316,7 @@ class MPPIController:
             )
         print("Done")
 
-    def mppi(self, init_pose):
+    def mppi(self, init_pose=None):
         t0 = time.time()
         # NOTE:
         # Network input can be:
@@ -358,7 +343,7 @@ class MPPIController:
         # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
         # between inferred-poses from the particle filter.
         self.noise = self.noise_dist.rsample(
-            torch.size([self.K, self.T])
+            (self.K, self.T)
         )  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
         # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
 
@@ -372,7 +357,6 @@ class MPPIController:
         )
         self.controls[:, :, 1] = torch.clamp(self.controls[:, :, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
 
-        assert self.nominal_control.repeat(self.K, 1, 1).shape == (self.K, self.T, 2)
         self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
 
         self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
@@ -381,9 +365,9 @@ class MPPIController:
 
         # Perform the MPPI weighting on your calculated costs
         beta = torch.min(self.cost)
-        assert beta >= 0, "Minimum cost is < 0. beta = {}".format(beta)
+        # assert beta >= 0, "Minimum cost is < 0. beta = {}".format(beta)
 
-        self.cost = self.cost - beta
+        self.cost -= beta
         self.weights = torch.zeros_like(self.cost)
         self.weights = torch.exp((-1.0 / self._lambda) * (self.cost))
         self.weights = self.weights / torch.sum(self.weights)
@@ -391,17 +375,10 @@ class MPPIController:
         assert (
             torch.abs(torch.sum(self.weights) - 1) < 1e-5
         ), "self.weights sums to {} (not == 1)".format(torch.sum(self.weights))
-        # Generate the new nominal control
-        for t in xrange(self.T):
-            self.nominal_control[t] = self.nominal_control[t] + torch.sum(
-                self.noise[:, t, :] * self.weights.view(self.K, 1).repeat(1, 2), dim=0
-            )
 
-        for t in xrange(self.T):
-            self.nominal_rollout[t] = torch.sum(
-                self.rollouts[:, t, :] * self.weights.view(self.K, 1).repeat(1, 3),
-                dim=0,
-            )
+        # Generate the new nominal control
+        self.nominal_control += torch.sum(self.noise * self.weights.view(self.K, 1, 1).repeat(1, self.T, 2), dim=0)  # This mess with self.weights is just to expand it to match self.noise [self.K x self.T x 2]
+        self.nominal_rollout = torch.sum(self.rollouts * self.weights.view(self.K, 1, 1).repeat(1, self.T + 1, 3), dim=0)
         self.nominal_control[:, 1] = torch.clamp(self.nominal_control[:, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
         run_ctrl = self.nominal_control[0].clone()
         self.nominal_control = torch.cat(
@@ -495,8 +472,8 @@ class MPPIController:
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node
 
-    T = 20
-    K = 2024
+    T = 10
+    K = 20
     sigma = 0.05  # These values will need to be tuned
     _lambda = 1.0
 
