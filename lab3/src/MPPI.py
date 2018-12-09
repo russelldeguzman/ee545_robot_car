@@ -260,7 +260,7 @@ class MPPIController:
 
             cost = cost - torch.min(cost)
             cost_max = torch.max(cost)
-            if cost_max > 0:
+            if cost_max > 0.001:
                 cost = cost / cost_max
             print(name)
             print(cost)
@@ -449,8 +449,8 @@ class MPPIController:
         ctrlmsg = AckermannDriveStamped()
         ctrlmsg.header = Utils.make_header("map")
         ctrlmsg.header.seq = self.msgid
-        ctrlmsg.drive.steering_angle = steer
-        ctrlmsg.drive.speed = speed
+        ctrlmsg.drive.steering_angle = np.where(np.isnan(steer), 0, steer)
+        ctrlmsg.drive.speed = np.where(np.isnan(speed), 0, speed)
         self.ctrl_pub.publish(ctrlmsg)
         self.msgid += 1
 
