@@ -58,8 +58,8 @@ class MPPIController:
         # )
         self.STEER_ANGLE_MIN = -0.34
         self.STEER_ANGLE_MAX = 0.341
-        self.MAX_REVERSE_SPEED = self.eprm2mps(float(rospy.get_param("/vesc/vesc_driver/speed_min")))
-        self.MAX_FWD_SPEED = self.eprm2mps(float(rospy.get_param("/vesc/vesc_driver/speed_max")))
+        self.MAX_REVERSE_SPEED = self.erpm2mps(float(rospy.get_param("/vesc/vesc_driver/speed_min")))
+        self.MAX_FWD_SPEED = self.erpm2mps(float(rospy.get_param("/vesc/vesc_driver/speed_max")))
         self.CAR_LENGTH = 0.33
         self.OOB_COST = 100000  # Cost associated with an out-of-bounds pose
         self.MAX_SPEED = 5.0  # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
@@ -364,7 +364,7 @@ class MPPIController:
             self.nominal_control.repeat(torch.Size([self.K, 1, 1])) + self.noise
         )
         self.controls[:, :, 1] = torch.clamp(self.controls[:, :, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
-        self.controls[:, :, 0] = torch.clamp(self.controls[:, :, 1[, self.MAX_REVERSE_SPEED, self.MAX_FWD_SPEED]])
+        self.controls[:, :, 0] = torch.clamp(self.controls[:, :, 0], self.MAX_REVERSE_SPEED, self.MAX_FWD_SPEED)
         self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
 
         self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
