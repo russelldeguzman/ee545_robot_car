@@ -33,6 +33,11 @@ class RBFilter:
         self.bridge = CvBridge()
         self.error_buff = deque(maxlen=error_buff_length)
         self.center = dict()
+        self.red_x = None
+        self.red_y = None
+        self.blue_x = None
+        self.blue_y = None
+        self.rgb_img = None
         #Publisher, Subscribers
         self.img_sub = rospy.Subscriber(IMAGE_TOPIC, Image, self.image_cb)
         self.img_pub = rospy.Publisher(IMGPUB_TOPIC, Image, queue_size= 10)
@@ -116,7 +121,7 @@ class RBFilter:
 
         return hsv_mask
 
-    def area_check(self, rgb_img):
+    def area_check(self):
         blue_samp = np.mean([[208, 90, 90], [208, 70, 88], [207,100,96], [204,73,100]], axis=0)  # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
         red_samp = np.mean([[355, 40, 100], [355, 35, 100], [338, 25, 100], [356,58,100]], axis=0) # NOTE: these are in Photoshop HSV and must be converted to CV2's weird ranges
         # red_rollover =[2, 28,100]
@@ -124,10 +129,9 @@ class RBFilter:
         BLUE_TOL = [10, 50, 20]   # Blue hue tolerance
         RED_TOL = [10, 50, 20]  # Red hue tolerance
 
-        self.hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
+        self.hsv_img = cv2.cvtColor(self.rgb_img, cv2.COLOR_BGR2HSV)
         self.mask_red = self.hsv_thresh(red_samp, RED_TOL)
         self.mask_blue = self.hsv_thresh(blue_samp, BLUE_TOL)
-        drive_msg = AckermannDriveStamped()
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
         
@@ -145,11 +149,13 @@ class RBFilter:
         # TODO - it might be better if we adjust this threshold dynamically based on either depth info from the RealSense or our best guess as to distance-to-target based on ParticleFilter
         # Dead simple version - do it as a function of the centroid height?
 
-        red_square_present, red_x, red_y = self.is_object_present(self.mask_red, square_area_threshold, color='red')
-        cv2.circle(rgb_img, (red_x, red_y), 7, (255, 255, 255), -1)
+        red_square_present, self.red_x, self.red_y = self.is_object_present(self.mask_red, square_area_threshold, color='red')
+        if red_square_present:
+            cv2.circle(self.rgb_img, (self.red_x, self.red_y), 7, (255, 255, 255), -1)
 
-        blue_square_present, blue_x, blue_y = self.is_object_present(self.mask_blue, square_area_threshold, color='blue')
-        cv2.circle(rgb_img, (blue_x, blue_y), 7, (255, 255, 255), -1)
+        blue_square_present, self.blue_x, self.blue_y = self.is_object_present(self.mask_blue, square_area_threshold, color='blue')
+        if blue_square_present:
+            cv2.circle(self.rgb_img, (self.blue_x, self.blue_y), 7, (255, 255, 255), -1)
 
         if(red_square_present):
             print "Red present"
@@ -160,7 +166,7 @@ class RBFilter:
 
         # If both red and blue detected, deal with the one that is closer (lower y_val) first
         if red_square_present and blue_square_present:
-            if blue_y < red_y:
+            if self.blue_y < self.red_y:
                 # Blue centroid is closer than red centroid (roughly - this doesn't really factor in angled trajectories)
                 self.publish_control('blue')
             else:
@@ -219,15 +225,17 @@ class RBFilter:
 
     def publish_control(self, color):
         if color is 'red':
-            turn_angle = self.compute_steering_angle_red(red_x, rgb_img.shape[1])
+            turn_angle = self.compute_steering_angle_red(self.red_x, self.rgb_img.shape[1])
             print "Red present, turn - ", turn_angle
 
         elif color is 'blue':
-            error = self.compute_error(blue_x, rgb_img.shape[1])
+            error = self.compute_error(self.blue_x, self.rgb_img.shape[1])
             turn_angle = self.compute_steering_angle_blue(error)
             print "Blue present, turn - ", turn_angle
         else:
             raise ColorNotSpecified('Argument \'color\' was not one of [\'red\', \'blue\']')
+
+        drive_msg = AckermannDriveStamped()
         drive_msg.header = Utils.make_header('map')
         drive_msg.drive.steering_angle = turn_angle
         drive_msg.drive.speed = self.speed
@@ -236,17 +244,17 @@ class RBFilter:
     def image_cb(self,data):
         # print('callback')
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+            self.rgb_img = self.bridge.imgmsg_to_cv2(data, "bgr8")
         except CvBridgeError as e:
             print(e)
 
-        self.area_check(cv_image)
+        self.area_check()
 
-        cv2.imshow("BGR8 Image", cv_image)
+        cv2.imshow("BGR8 Image", self.rgb_img)
         cv2.waitKey(3)
 
         try:
-            self.img_pub.publish(self.bridge.cv2_to_imgmsg(cv_image, "bgr8"))
+            self.img_pub.publish(self.bridge.cv2_to_imgmsg(self.rgb_img, "bgr8"))
         except CvBridgeError as e:
             print(e)
 
