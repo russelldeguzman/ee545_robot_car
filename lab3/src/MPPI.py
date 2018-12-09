@@ -68,7 +68,7 @@ class MPPIController:
         self.T = T  # Length of rollout horizon
         self.K = K  # Number of sample rollouts
         self.sigma = torch.tensor(
-            [[.1, 0.0], [0.0, .1]], dtype=self.dtype, device=self.device
+            [[.1, 0.0], [0.0, .3]], dtype=self.dtype, device=self.device
         )
         # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
         self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
@@ -209,7 +209,9 @@ class MPPIController:
 
         map_xy = Utils.world_to_map_torch(self.rollouts[:, 1:, :].contiguous().view(-1, 3), self.map_info, self.device).view(self.K, self.T, 2)
         in_bounds = self.permissible_region[torch.clamp(map_xy[:,:, 1], 0, self.map_height - 1), torch.clamp(map_xy[:,:,0], 0, self.map_width - 1)].reshape(self.K, self.T)  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
-        print(in_bounds.shape)
+        # print('in_bounds.shape:', in_bounds.shape)
+        # if np.any(np.invert(in_bounds)):
+        #     print('OOB Points found!')
         first_oob = np.argmin(in_bounds, axis=1)
 
         # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
@@ -227,11 +229,11 @@ class MPPIController:
         # print(dist_cost_all.shape)
         # print(self.time_derate.shape)
         dist_cost = torch.sum(dist_cost_all * self.time_derate, dim=1)
-        assert np.all(
-            np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)
-        ), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(
-            pose_cost.shape, ctrl_cost.shape, bounds_cost.shape
-        )
+        # assert np.all(
+        #     np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)
+        # ), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(
+        #     pose_cost.shape, ctrl_cost.shape, bounds_cost.shape
+        # )
         # describe([pose_cost, ctrl_cost, bounds_cost, dist_cost])
         # print("Costs:")
         for cost, name in zip(
@@ -243,9 +245,9 @@ class MPPIController:
 
             if (name == "bounds_cost") and (torch.max(cost) > 0):
                 cost = cost / torch.min(cost[torch.nonzero(cost)])
-                assert (
-                    torch.min(cost[torch.nonzero(cost)]) >= 1.0
-                ), "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
+                # assert (
+                #     torch.min(cost[torch.nonzero(cost)]) >= 1.0
+                # ), "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
                 print(name)
                 print(cost)
                 continue
@@ -256,7 +258,7 @@ class MPPIController:
                 cost = cost / cost_max
             print(name)
             print(cost)
-        self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2 * dist_cost)
+        self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (10 * dist_cost)
 
     def mm_step(self, states, controls):
 
@@ -472,8 +474,8 @@ class MPPIController:
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node
 
-    T = 10
-    K = 20
+    T = 40
+    K = 2048
     sigma = 0.05  # These values will need to be tuned
     _lambda = 1.0
 
