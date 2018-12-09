@@ -201,11 +201,11 @@ class MPPIController:
             (torch.abs(self.controls[:, :, 0]) - self.MAX_SPEED) ** 2, dim=1
         )  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
-        ctrl_cost = self._lambda * torch.sum(
+        ctrl_cost = self._lambda * torch.sum(torch.sum(
             torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma))
             * torch.abs(self.noise),
-            dim=(1, 2), keepdim=False
-        )  # This is verified to give same result as the looped code shown in the spec
+            dim=2
+        ), dim=1) # This is verified to give same result as the looped code shown in the spec
 
         total_in_bounds = 0
         # TODO: Probably need a vectorized way of doing this
@@ -253,8 +253,8 @@ class MPPIController:
             [pose_cost, ctrl_cost, bounds_cost, dist_cost],
             ["pose_cost", "ctrl_cost", "bounds_cost", "dist_cost"],
         ):
-            if np.any(np.isnan(cost)):
-                assert False, "NaNs in output: {}".format(name)
+            # if np.any(np.isnan(cost)):
+            #     assert False, "NaNs in output: {}".format(name)
 
             if (name == "bounds_cost") and (torch.max(cost) > 0):
                 cost = cost / torch.min(cost[torch.nonzero(cost)])
