@@ -234,6 +234,8 @@ class RBFilter:
         return turn_angle
 
     def publish_control(self, color):
+        if not (self.cmd_pub.get_num_connections() > 0):
+            return
         if color is 'red':
             turn_angle = self.compute_steering_angle_red(self.red_x, self.rgb_img.shape[1])
             print "Red present, turn - ", turn_angle
@@ -263,10 +265,11 @@ class RBFilter:
         cv2.imshow("BGR8 Image", self.rgb_img)
         cv2.waitKey(3)
 
-        try:
-            self.img_pub.publish(self.bridge.cv2_to_imgmsg(self.rgb_img, "bgr8"))
-        except CvBridgeError as e:
-            print(e)
+        if self.img_pub.get_num_connections() > 0:
+            try:
+                self.img_pub.publish(self.bridge.cv2_to_imgmsg(self.rgb_img, "bgr8"))
+            except CvBridgeError as e:
+                print(e)
 
 
 def main():
