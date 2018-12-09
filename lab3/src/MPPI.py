@@ -307,11 +307,11 @@ class MPPIController:
         states_next[:, 1] = states[:, 1] + dy
         # states[:, 2] += dtheta + np.random.normal(loc=0.0, scale=KM_THETA_FIX_NOISE, size=states.shape[0])
         states_next[:, 2] = ((states[:, 2] + dtheta + np.pi) % (2 * np.pi)) - np.pi
-        assert torch.all(
-            (states_next[:, 2] <= np.pi) | (states_next[:, 2] >= -np.pi)
-        ), "states_next[:,2] = {} (not within the range [-pi, pi])".format(
-            states_next[:, 2]
-        )
+        # assert torch.all(
+        #     (states_next[:, 2] <= np.pi) | (states_next[:, 2] >= -np.pi)
+        # ), "states_next[:,2] = {} (not within the range [-pi, pi])".format(
+        #     states_next[:, 2]
+        # )
 
         return states_next
 
