@@ -107,7 +107,7 @@ class MPPIController:
             self.T, 2, dtype=self.dtype, device=self.device
         )
         self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(
-            torch.zeros(2, dtype=self.dtype, device=self.device), self.sigma
+            torch.zeros(2, dtype=self.dtype, device='cpu'), self.sigma.cpu()
         )
         self.noise = torch.zeros(
             self.K, self.T, 2, dtype=self.dtype, device=self.device
@@ -358,8 +358,8 @@ class MPPIController:
         # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
         # between inferred-poses from the particle filter.
         self.noise = self.noise_dist.rsample(
-            self.noise.shape[:-1]
-        )  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
+            (self.K, self.T)
+        ).cuda()  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
         # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
 
         # print(self.nominal_control.type())
