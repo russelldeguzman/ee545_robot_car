@@ -82,11 +82,11 @@ class RBFilter:
         if M["m00"] != 0:
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
-            self.center(color) = [cX, cY]
+            self.center[color] = [cX, cY]
             return True, cX, cY 
         else:
             cX, cY = None, None
-            self.center(color) = [cX, cY]
+            self.center[color] = [cX, cY]
             return False, cX, cY
 
 
