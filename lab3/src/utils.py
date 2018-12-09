@@ -182,28 +182,30 @@ Convert array of poses in the world to pixel locations in the map image
   map_info: Info about the map (returned by get_map)
 '''    
 def world_to_map_torch(poses, map_info, device):
-    world_poses = poses[:, :2].clone()
+    map_poses = torch.tensor(poses.shape[:-1], dtype=torch.float, device=device)
     scale = torch.tensor(map_info.resolution, dtype=torch.float, device=device)
     angle = torch.tensor(-quaternion_to_angle(map_info.origin.orientation), dtype=torch.float, device=device)
 
     # Translation
-    world_poses[:,0] -= torch.tensor(map_info.origin.position.x, dtype=torch.float, device=device)
-    world_poses[:,1] -= torch.tensor(map_info.origin.position.y, dtype=torch.float, device=device)
+    map_poses[:,0] -= torch.tensor(map_info.origin.position.x, dtype=torch.float, device=device)
+    map_poses[:,1] -= torch.tensor(map_info.origin.position.y, dtype=torch.float, device=device)
 
     # Scale
-    world_poses = torch.div(world_poses, scale)
+    world_poses = torch.div(map_poses, scale)
 
     if angle == 0:
-      return world_poses
+      map_poses = map_poses.type('torch.int')
+      return map_poses
 
     # Rotation
     c, s = torch.cos(angle), torch.sin(angle)
     
     # Store the x coordinates since they will be overwritten
     temp = poses[:,0].clone()
-    world_poses[:,0] = c*poses[:,0] - s*poses[:,1]
-    world_poses[:,1] = s*temp       + c*poses[:,1]
-    return world_poses
+    map_poses[:,0] = c*poses[:,0] - s*poses[:,1]
+    map_poses[:,1] = s*temp       + c*poses[:,1]
+    map_poses = map_poses.type('torch.int')
+    return map_poses
 
 def describe(var_list):
     # Name code taken from here: https://stackoverflow.com/questions/18425225/getting-the-name-of-a-variable-as-a-string/18425523
