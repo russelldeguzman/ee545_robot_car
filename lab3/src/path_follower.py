@@ -23,7 +23,7 @@ PLAN_PUB_TOPIC = "/planner_node/full_car_plan"
 PUB_TOPIC = "/vesc/high_level/ackermann_cmd_mux/input/nav_0"
 # SUB_TOPIC = '/sim_car_pose/pose' # The topic that provides the simulated car pose
 MAP_TOPIC = "static_map"  # The service topic that will provide the map
-
+HANDOFF_TOPIC = "controller/handoff"
 """
 Follows a given plan using constant velocity and PID control of the steering angle
 """
@@ -61,6 +61,7 @@ class PathFollower:
         kd,
         error_buff_length,
         speed,
+        handoff_threshold
     ):
         # Store the passed parameters
         self.plan = plan
@@ -82,15 +83,19 @@ class PathFollower:
         # https://docs.python.org/2/library/collections.html#collections.deque
         self.error_buff = deque(maxlen=error_buff_length)
         self.speed = speed
+        self.handoff_threshold = handoff_threshold
+        #Array with positions of Goal Targets
+        self.plan_targets = np.array([[2600, 660, 1.8],[1880, 440, 3.55],[1435, 545, 2.7],[1250, 460, 3.0],[540, 835, 4.1 ]])
 
         # Publisher
         self.cmd_pub = rospy.Publisher(PUB_TOPIC, AckermannDriveStamped, queue_size=10)
         self.plan_pub = rospy.Publisher(PLAN_PUB_TOPIC, PoseArray, queue_size=1)
-
+        self.handoff_pub = rospy.Publisher(HANDOFF_TOPIC, bool, queue_size=1 )
         # Create a subscriber to pose_topic, with callback 'self.pose_cb'
         self.pose_sub = rospy.Subscriber(
             POSE_TOPIC, PoseStamped, self.pose_cb, queue_size=1
         )
+        
 
 
 
@@ -178,6 +183,14 @@ class PathFollower:
         rotation_error = (
             (goal_idx_th - cur_pose_th + np.pi) % (2 * np.pi)
         ) - np.pi  # Needed in order to constrain this difference to the interval [-pi, pi] as opposed to [-2*pi, 2*pi]
+
+        for i in range(self.plan_targets.shape[0]):
+            if np.linalg.norm(self.plan_targets[i, :2] - cur_pose[:2]) < self.handoff_threshold:
+                self.handoff_pub.publish(True)
+                print("Handoff - ", True)
+                break
+            else:
+                self.handoff_pub.publish(False)
 
         rospy.loginfo("goal_th = ")
         rospy.loginfo(goal_idx_th)
@@ -318,7 +331,7 @@ def main():
     error_buff_length = rospy.get_param("~error_buff_length", None)
     speed = rospy.get_param("~speed", None)
     bag_path = rospy.get_param('~bag_path')
-
+    handoff_threshold = rospy.get_param('~handoff_thresh', 100)
 
     bag = rosbag.Bag(bag_path)
     plan = deque()
@@ -343,6 +356,7 @@ def main():
         kd,
         error_buff_length,
         speed,
+        handoff_threshold
     )
 
     rospy.sleep(2)
