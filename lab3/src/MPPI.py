@@ -23,10 +23,14 @@ from geometry_msgs.msg import (
     PoseStamped,
     PoseWithCovarianceStamped,
 )
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, OccupancyGrid
 from nav_msgs.srv import GetMap
 from vesc_msgs.msg import VescStateStamped
 
+import matplotlib.pyplot as plt
+from scipy import ndimage
+
+COST_MAP_TOPIC = "/mppi/occupancy_grid"
 
 class MPPIController:
     def __init__(self, T, K, sigma=(0.5 * torch.eye(2)), _lambda=0.5):
@@ -70,8 +74,8 @@ class MPPIController:
         self.T = T  # Length of rollout horizon
         self.K = K  # Number of sample rollouts
         self.sigma = torch.tensor(
-            [[.08, 0.0], [0.0, .05]], dtype=self.dtype, device=self.device
-        )
+            [[.5, 0.0], [0.0, 0.2]], dtype=self.dtype, device=self.device
+        )  # [[Speed_variance, 0], [[0, steer_variance]]]
         # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
         self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
         self.dt = None
@@ -84,6 +88,8 @@ class MPPIController:
         self.missed_msgs = 0
         self.max_angle = -10000.0
         self.min_angle = 10000.0
+
+        self.map_xy = torch.zeros(self.K, self.T, dtype=torch.int32)
 
         # PyTorch / GPU data configuration
         # TODO
@@ -161,13 +167,40 @@ class MPPIController:
         array_255 = np.array(map_msg.data).reshape(
             (map_msg.info.height, map_msg.info.width)
         )
-        self.permissible_region = np.zeros_like(array_255, dtype=bool)
+        self.permissible_region = np.zeros_like(array_255, dtype=int)
         self.permissible_region[
             array_255 == 0
         ] = 1  # Numpy array of dimension (map_msg.info.height, map_msg.info.width),
         # With values 0: not permissible, 1: permissible
-        x_perm, y_perm = np.where(self.permissible_region == 1)
-        self.permit_coords = np.vstack((x_perm, y_perm)).T
+        # plt.imshow(self.permissible_region)
+        # plt.show()
+
+        # How much to dilate in the real world
+        radiusBuffer = .5
+        MAX_VAL_COLLIDE = 1000
+        MIN_VAL_SPACE = 100
+        sigma_pixels = 5
+        sigma_find_pixels=100
+
+        # Convert the bool map_img to int map_img
+        self.permissible_region = np.logical_not(self.permissible_region)
+
+        # convert radiusBuffer from meters to pixels
+        radiusBufferPxl = int(radiusBuffer/self.map_info.resolution)
+
+        # Filter out bad pixels
+        for n in range(2):
+            self.permissible_region = ndimage.binary_opening(self.permissible_region).astype(np.int)
+
+        #Dilate the walls to add extra buffer  
+        for n in range(radiusBufferPxl):
+            self.permissible_region = ndimage.binary_dilation(self.permissible_region).astype(np.int)
+        
+        self.permissible_region = np.logical_not(self.permissible_region).astype(np.bool)
+        # plt.imshow(self.permissible_region)
+        # plt.show()
+        self.cost_pub = rospy.Publisher(COST_MAP_TOPIC, OccupancyGrid, queue_size=1)
+
 
         print("Making callbacks")
         self.goal_sub = rospy.Subscriber(
@@ -196,15 +229,23 @@ class MPPIController:
         )
         print("Current Pose: ", self.last_pose)
         print("SETTING Goal: ", self.goal)
-
+        in_bounds_test = np.zeros((2,2), dtype=np.bool)
+        in_bounds_test[:,0] = True
+        map_xy_test = Utils.world_to_map_torch(torch.tensor(self.goal, dtype=self.dtype, device=self.device).view(-1,3).repeat(2,1), self.map_info, self.device).view(-1,2)
+        in_bounds_test[:,1] = self.permissible_region[map_xy_test[:, 1].numpy(), map_xy_test[:, 0].numpy()]
+        first_oob_test = np.argmin(in_bounds_test, axis=1)
+        # print(' ')
+        rospy.loginfo('clicked_bounds_check = {}'.format(first_oob_test))
+        # print(' ')
     def compute_costs(self):
         pose_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
         bounds_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
         ctrl_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
+        in_bounds = np.zeros((self.K, self.T + 1), dtype=np.bool)
 
         ### COMMENTED OUT FOR TESTING ###
         pose_cost = torch.sum(
-            (torch.abs(self.controls[:, :, 0]) - self.MAX_SPEED) ** 2, dim=1
+            (self.controls[:, :, 0] - self.MAX_SPEED) ** 2, dim=1
         )  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
         ctrl_cost = self._lambda * torch.sum(torch.sum(
@@ -213,11 +254,15 @@ class MPPIController:
             dim=2
         ), dim=1) # This is verified to give same result as the looped code shown in the spec
 
-        map_xy = Utils.world_to_map_torch(self.rollouts[:, 1:, :].contiguous().view(-1, 3), self.map_info, self.device).view(self.K, self.T, 2)
-        in_bounds = self.permissible_region[torch.clamp(map_xy[:,:, 1], 0, self.map_height - 1), torch.clamp(map_xy[:,:,0], 0, self.map_width - 1)].reshape(self.K, self.T)  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
-        # print('in_bounds.shape:', in_bounds.shape)
-        if np.any(np.logical_not(in_bounds)):
-            print('{} OOB Points found!'.format(np.sum(np.logical_not(in_bounds))))
+        map_xy = Utils.world_to_map_torch(self.rollouts.view(-1, 3), self.map_info, self.device).view(self.K, self.T + 1, 2)
+        # print('map_xy:', map_xy[0, 0, :])
+        # in_bounds[:] = self.permissible_region[map_xy[:,:, 1].numpy(), map_xy[:,:,0].numpy()]  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
+        in_bounds[:] = self.permissible_region[map_xy[:,:, 1].numpy(), map_xy[:,:,0].numpy()].reshape(self.K, self.T + 1)  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
+        # print('in_bounds type:', in_bounds.dtype)
+        # print('in_bounds', in_bounds[0, 0])
+        # print('in_bounds shape', in_bounds.shape)
+        # if np.any(np.logical_not(in_bounds)):
+        #     print('{} OOB Points found!'.format(np.sum(np.logical_not(in_bounds))))
         first_oob = np.argmin(in_bounds, axis=1)
 
         # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
@@ -254,17 +299,17 @@ class MPPIController:
                 # assert (
                 #     torch.min(cost[torch.nonzero(cost)]) >= 1.0
                 # ), "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
-                print(name)
-                print(cost)
+                # print(name)
+                # print(cost)
                 continue
 
             cost = cost - torch.min(cost)
             cost_max = torch.max(cost)
-            if cost_max > 0.001:
+            if cost_max > 0:
                 cost = cost / cost_max
-            print(name)
-            print(cost)
-        self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (10 * dist_cost)
+            # print(name)
+            # print(cost)
+        self.cost = (pose_cost) + (4 * ctrl_cost) + (bounds_cost * 1000) + (20 * dist_cost)
 
     def mm_step(self, states, controls):
 
@@ -456,7 +501,7 @@ class MPPIController:
 
     # Publish some paths to RVIZ to visualize rollouts
     def visualize(self):
-        print("Running viz")
+        # print("Running viz")
         if self.path_pub.get_num_connections() > 0:
             frame_id = "map"
             pa = Path()
@@ -477,11 +522,22 @@ class MPPIController:
             ]
             self.nom_path_pub.publish(pa)
 
+        # ### FOR DEBUG ONLY. REMOVE TO RUN ON CAR ###
+        # val_map_disp = self.permissible_region.copy()
+        # val_map_disp = (val_map_disp.astype(np.int8) * 255).astype(np.int8)
+        # val_map_disp = val_map_disp.astype(np.int8)
+        # og = OccupancyGrid()
+        # og.header = Utils.make_header('map')
+        # og.info = self.map_info
+        # og.data = val_map_disp.flatten().astype(np.int8).tolist()
+        # print(type(og.data[0]))
+        # self.cost_pub.publish(og)
+
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node
 
-    T = 40
-    K = 2048
+    T = 60
+    K = 1024
     sigma = 0.05  # These values will need to be tuned
     _lambda = 1.0
 

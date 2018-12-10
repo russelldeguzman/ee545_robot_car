@@ -191,9 +191,11 @@ def world_to_map_torch(poses, map_info, device):
     map_poses[:,1] -= torch.tensor(map_info.origin.position.y, dtype=torch.float, device=device)
 
     # Scale
-    world_poses = torch.div(map_poses, scale)
+    map_poses /= scale
 
     if angle == 0:
+      map_poses[:, 0] = map_poses[:, 0].clamp(0, map_info.width - 1)
+      map_poses[:, 1] = map_poses[:, 1].clamp(0, map_info.height - 1)
       map_poses = map_poses.type(dtype=torch.int32)
       return map_poses
 
@@ -201,10 +203,12 @@ def world_to_map_torch(poses, map_info, device):
     c, s = torch.cos(angle), torch.sin(angle)
     
     # Store the x coordinates since they will be overwritten
-    temp = poses[:,0].clone()
-    map_poses[:,0] = c*poses[:,0] - s*poses[:,1]
-    map_poses[:,1] = s*temp       + c*poses[:,1]
-    map_poses = map_poses.type(torch.tensor([], dtype=torch.int32, device=device))
+    temp = map_poses[:,0].clone()
+    map_poses[:,0] = c*map_poses[:,0] - s*map_poses[:,1]
+    map_poses[:,1] = s*temp + c*map_poses[:,1]
+    map_poses[:, 0] = map_poses[:, 0].clamp(0, map_info.height - 1)
+    map_poses[:, 1] = map_poses[:, 1].clamp(0, map_info.width - 1)
+    map_poses = map_poses.type(dtype=torch.int32)
     return map_poses
 
 def describe(var_list):
