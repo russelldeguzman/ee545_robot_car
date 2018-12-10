@@ -32,6 +32,7 @@ from scipy import ndimage
 
 COST_MAP_TOPIC = "/mppi/occupancy_grid"
 
+
 class MPPIController:
     def __init__(self, T, K, sigma=(0.5 * torch.eye(2)), _lambda=0.5):
         self.dtype = torch.float
@@ -62,8 +63,12 @@ class MPPIController:
         # )
         self.STEER_ANGLE_MIN = -0.34
         self.STEER_ANGLE_MAX = 0.341
-        self.MAX_REVERSE_SPEED = self.erpm2mps(float(rospy.get_param("/vesc/vesc_driver/speed_min")))
-        self.MAX_FWD_SPEED = self.erpm2mps(float(rospy.get_param("/vesc/vesc_driver/speed_max")))
+        self.MAX_REVERSE_SPEED = self.erpm2mps(
+            float(rospy.get_param("/vesc/vesc_driver/speed_min"))
+        )
+        self.MAX_FWD_SPEED = self.erpm2mps(
+            float(rospy.get_param("/vesc/vesc_driver/speed_max"))
+        )
         self.CAR_LENGTH = 0.33
         self.OOB_COST = 100000  # Cost associated with an out-of-bounds pose
         self.MAX_SPEED = 5.0  # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
@@ -74,7 +79,7 @@ class MPPIController:
         self.T = T  # Length of rollout horizon
         self.K = K  # Number of sample rollouts
         self.sigma = torch.tensor(
-            [[.5, 0.0], [0.0, 0.2]], dtype=self.dtype, device=self.device
+            [[0.3, 0.0], [0.0, 0.2]], dtype=self.dtype, device=self.device
         )  # [[Speed_variance, 0], [[0, steer_variance]]]
         # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
         self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
@@ -120,14 +125,14 @@ class MPPIController:
         self.noise = torch.zeros(
             self.K, self.T, 2, dtype=self.dtype, device=self.device
         )
-        self.cost = torch.zeros(
-            self.K, dtype=self.dtype, device=self.device
-        )
+        self.cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
         self.nominal_rollout = torch.zeros(
             self.T, 3, dtype=self.dtype, device=self.device
         )
         self.time_derate = (
-            torch.arange(start=1, end=self.T + 1, step=1, dtype=self.dtype, device=self.device)
+            torch.arange(
+                start=1, end=self.T + 1, step=1, dtype=self.dtype, device=self.device
+            )
             .view(1, -1)
             .repeat(self.K, 1)
         )
@@ -152,6 +157,11 @@ class MPPIController:
         self.nom_path_pub = rospy.Publisher("/mppi/nominal", Path, queue_size=1)
 
         # Use the 'static_map' service (launched by MapServer.launch) to get the map
+
+        BAD_WAYPOINTS_MAP = np.flipud(np.array(
+            [[1910, 340], [1500, 210], [1520, 435], [1130, 400], [670, 840]],
+            dtype=np.int32
+        ))
         map_service_name = rospy.get_param("~static_map", "static_map")
         print("Getting map from service: ", map_service_name)
         rospy.wait_for_service(map_service_name)
@@ -176,31 +186,45 @@ class MPPIController:
         # plt.show()
 
         # How much to dilate in the real world
-        radiusBuffer = .5
+        radiusBuffer = 0.5
         MAX_VAL_COLLIDE = 1000
         MIN_VAL_SPACE = 100
         sigma_pixels = 5
-        sigma_find_pixels=100
+        sigma_find_pixels = 100
 
         # Convert the bool map_img to int map_img
         self.permissible_region = np.logical_not(self.permissible_region)
 
         # convert radiusBuffer from meters to pixels
-        radiusBufferPxl = int(radiusBuffer/self.map_info.resolution)
+        radiusBufferPxl = int(radiusBuffer / self.map_info.resolution)
 
         # Filter out bad pixels
         for n in range(2):
-            self.permissible_region = ndimage.binary_opening(self.permissible_region).astype(np.int)
+            self.permissible_region = ndimage.binary_opening(
+                self.permissible_region
+            ).astype(np.int)
 
-        #Dilate the walls to add extra buffer  
+        # Add positions of bad waypoints (needs to be done after filtering step since they're roughly point sinc's)
+        self.permissible_region = np.flipud(self.permissible_region)
+        # plt.subplot(2,1,1)
+        # plt.imshow(self.permissible_region.astype(np.int))
+        for pt in BAD_WAYPOINTS_MAP:
+            self.permissible_region[(pt[1] - 7):(pt[1] + 7), (pt[0] - 7):(pt[0] + 7)] = True  # 7 px in the bounds frame is the approximate size of the target, assuming a 1 foot x 1 foot target (actual targets are slightly smaller)
+        self.permissible_region = np.flipud(self.permissible_region)
+
+        # Dilate the walls to add extra buffer
         for n in range(radiusBufferPxl):
-            self.permissible_region = ndimage.binary_dilation(self.permissible_region).astype(np.int)
-        
-        self.permissible_region = np.logical_not(self.permissible_region).astype(np.bool)
-        # plt.imshow(self.permissible_region)
+            self.permissible_region = ndimage.binary_dilation(
+                self.permissible_region
+            ).astype(np.int)
+
+        self.permissible_region = np.logical_not(self.permissible_region).astype(
+            np.bool
+        )
+        # plt.subplot(2,1,2)
+        # plt.imshow(self.permissible_region.astype(np.int))
         # plt.show()
         self.cost_pub = rospy.Publisher(COST_MAP_TOPIC, OccupancyGrid, queue_size=1)
-
 
         print("Making callbacks")
         self.goal_sub = rospy.Subscriber(
@@ -229,14 +253,23 @@ class MPPIController:
         )
         print("Current Pose: ", self.last_pose)
         print("SETTING Goal: ", self.goal)
-        in_bounds_test = np.zeros((2,2), dtype=np.bool)
-        in_bounds_test[:,0] = True
-        map_xy_test = Utils.world_to_map_torch(torch.tensor(self.goal, dtype=self.dtype, device=self.device).view(-1,3).repeat(2,1), self.map_info, self.device).view(-1,2)
-        in_bounds_test[:,1] = self.permissible_region[map_xy_test[:, 1].numpy(), map_xy_test[:, 0].numpy()]
+        in_bounds_test = np.zeros((2, 2), dtype=np.bool)
+        in_bounds_test[:, 0] = True
+        map_xy_test = Utils.world_to_map_torch(
+            torch.tensor(self.goal, dtype=self.dtype, device=self.device)
+            .view(-1, 3)
+            .repeat(2, 1),
+            self.map_info,
+            self.device,
+        ).view(-1, 2)
+        in_bounds_test[:, 1] = self.permissible_region[
+            map_xy_test[:, 1].numpy(), map_xy_test[:, 0].numpy()
+        ]
         first_oob_test = np.argmin(in_bounds_test, axis=1)
         # print(' ')
-        rospy.loginfo('clicked_bounds_check = {}'.format(first_oob_test))
+        rospy.loginfo("clicked_bounds_check = {}".format(first_oob_test))
         # print(' ')
+
     def compute_costs(self):
         pose_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
         bounds_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
@@ -248,16 +281,25 @@ class MPPIController:
             (self.controls[:, :, 0] - self.MAX_SPEED) ** 2, dim=1
         )  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
-        ctrl_cost = self._lambda * torch.sum(torch.sum(
-            torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma))
-            * torch.abs(self.noise),
-            dim=2
-        ), dim=1) # This is verified to give same result as the looped code shown in the spec
+        ctrl_cost = self._lambda * torch.sum(
+            torch.sum(
+                torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma))
+                * torch.abs(self.noise),
+                dim=2,
+            ),
+            dim=1,
+        )  # This is verified to give same result as the looped code shown in the spec
 
-        map_xy = Utils.world_to_map_torch(self.rollouts.view(-1, 3), self.map_info, self.device).view(self.K, self.T + 1, 2)
+        map_xy = Utils.world_to_map_torch(
+            self.rollouts.view(-1, 3), self.map_info, self.device
+        ).view(self.K, self.T + 1, 2)
         # print('map_xy:', map_xy[0, 0, :])
         # in_bounds[:] = self.permissible_region[map_xy[:,:, 1].numpy(), map_xy[:,:,0].numpy()]  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
-        in_bounds[:] = self.permissible_region[map_xy[:,:, 1].numpy(), map_xy[:,:,0].numpy()].reshape(self.K, self.T + 1)  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
+        in_bounds[:] = self.permissible_region[
+            map_xy[:, :, 1].numpy(), map_xy[:, :, 0].numpy()
+        ].reshape(
+            self.K, self.T + 1
+        )  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
         # print('in_bounds type:', in_bounds.dtype)
         # print('in_bounds', in_bounds[0, 0])
         # print('in_bounds shape', in_bounds.shape)
@@ -268,13 +310,17 @@ class MPPIController:
         # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
         # if n_in_bounds < map_poses.shape[0]:
         #   bounds_cost[k] = self.OOB_COST
-        bounds_cost = torch.tensor(np.where(first_oob > 0, self.OOB_COST * (self.T - first_oob), bounds_cost), dtype=self.dtype, device=self.device)
+        bounds_cost = torch.tensor(
+            np.where(first_oob > 0, self.OOB_COST * (self.T - first_oob), bounds_cost),
+            dtype=self.dtype,
+            device=self.device,
+        )
 
         cart_off = self.rollouts[:, 1:, :] - torch.tensor(
             self.goal, dtype=self.dtype, device=self.device
         )  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
         # print('cart_off', cart_off.shape)
-        dist_cost_all = torch.sqrt(
+        dist_cost_all = (
             cart_off[:, :, 0] ** 2 + cart_off[:, :, 1] ** 2
         )  # Calculates magnitude of distance from goal
         # print(dist_cost_all.shape)
@@ -309,7 +355,9 @@ class MPPIController:
                 cost = cost / cost_max
             # print(name)
             # print(cost)
-        self.cost = (pose_cost) + (4 * ctrl_cost) + (bounds_cost * 1000) + (20 * dist_cost)
+        self.cost = (
+            (pose_cost) + (4 * ctrl_cost) + (bounds_cost * 1000) + (20 * dist_cost)
+        )
 
     def mm_step(self, states, controls):
 
@@ -408,8 +456,12 @@ class MPPIController:
         self.controls = (
             self.nominal_control.repeat(torch.Size([self.K, 1, 1])) + self.noise
         )
-        self.controls[:, :, 1] = torch.clamp(self.controls[:, :, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
-        self.controls[:, :, 0] = torch.clamp(self.controls[:, :, 0], self.MAX_REVERSE_SPEED, self.MAX_FWD_SPEED)
+        self.controls[:, :, 1] = torch.clamp(
+            self.controls[:, :, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX
+        )
+        self.controls[:, :, 0] = torch.clamp(
+            self.controls[:, :, 0], self.MAX_REVERSE_SPEED, self.MAX_FWD_SPEED
+        )
         self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
 
         self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
@@ -430,9 +482,16 @@ class MPPIController:
         # ), "self.weights sums to {} (not == 1)".format(torch.sum(self.weights))
 
         # Generate the new nominal control
-        self.nominal_control += torch.sum(self.noise * self.weights.view(self.K, 1, 1).repeat(1, self.T, 2), dim=0)  # This mess with self.weights is just to expand it to match self.noise [self.K x self.T x 2]
-        self.nominal_rollout = torch.sum(self.rollouts * self.weights.view(self.K, 1, 1).repeat(1, self.T + 1, 3), dim=0)
-        self.nominal_control[:, 1] = torch.clamp(self.nominal_control[:, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
+        self.nominal_control += torch.sum(
+            self.noise * self.weights.view(self.K, 1, 1).repeat(1, self.T, 2), dim=0
+        )  # This mess with self.weights is just to expand it to match self.noise [self.K x self.T x 2]
+        self.nominal_rollout = torch.sum(
+            self.rollouts * self.weights.view(self.K, 1, 1).repeat(1, self.T + 1, 3),
+            dim=0,
+        )
+        self.nominal_control[:, 1] = torch.clamp(
+            self.nominal_control[:, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX
+        )
         run_ctrl = self.nominal_control[0].clone()
         self.nominal_control = torch.cat(
             (self.nominal_control[1:, :], self.nominal_control[-1, :].view(1, 2))
@@ -532,6 +591,7 @@ class MPPIController:
         # og.data = val_map_disp.flatten().astype(np.int8).tolist()
         # print(type(og.data[0]))
         # self.cost_pub.publish(og)
+
 
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node

@@ -183,6 +183,7 @@ Convert array of poses in the world to pixel locations in the map image
 '''    
 def world_to_map_torch(poses, map_info, device):
     map_poses = poses[:, :2].clone()
+    map_poses= map_poses.clamp(-60, 60).view(-1, 2) # This is just a super-conservative clamp on the x and y position in meters to hopefully solve a very occasional overflow issue
     scale = torch.tensor(map_info.resolution, dtype=torch.float, device=device)
     angle = torch.tensor(-quaternion_to_angle(map_info.origin.orientation), dtype=torch.float, device=device)
 
