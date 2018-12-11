@@ -13,14 +13,14 @@ from collections import deque
 from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import PoseArray, PoseStamped, Pose
-
+from std_msgs.msg import Bool
 # The topic to subscribe to for laser scans
 SCAN_TOPIC = '/scan' 
 # The topic to subscribe to for current pose of the car (From the particle filter)
 POSE_TOPIC = 'pf/viz/inferred_pose' 
 PLAN_PUB_TOPIC = "/planner_node/full_car_plan"
 # The topic to publish control commands to
-PUB_TOPIC = "/vesc/high_level/ackermann_cmd_mux/input/nav_0"
+PUB_TOPIC = "/vesc/high_level/ackermann_cmd_mux/input/nav_1"
 # SUB_TOPIC = '/sim_car_pose/pose' # The topic that provides the simulated car pose
 MAP_TOPIC = "static_map"  # The service topic that will provide the map
 HANDOFF_TOPIC = "controller/handoff"
@@ -90,7 +90,7 @@ class PathFollower:
         # Publisher
         self.cmd_pub = rospy.Publisher(PUB_TOPIC, AckermannDriveStamped, queue_size=10)
         self.plan_pub = rospy.Publisher(PLAN_PUB_TOPIC, PoseArray, queue_size=1)
-        self.handoff_pub = rospy.Publisher(HANDOFF_TOPIC, bool, queue_size=1 )
+        self.handoff_pub = rospy.Publisher(HANDOFF_TOPIC, Bool, queue_size=1 )
         # Create a subscriber to pose_topic, with callback 'self.pose_cb'
         self.pose_sub = rospy.Subscriber(
             POSE_TOPIC, PoseStamped, self.pose_cb, queue_size=1
@@ -186,11 +186,11 @@ class PathFollower:
 
         for i in range(self.plan_targets.shape[0]):
             if np.linalg.norm(self.plan_targets[i, :2] - cur_pose[:2]) < self.handoff_threshold:
-                self.handoff_pub.publish(True)
-                print("Handoff - ", True)
+                
+                b = Bool()
+                b.data = True
+                self.handoff_pub.publish(b)
                 break
-            else:
-                self.handoff_pub.publish(False)
 
         rospy.loginfo("goal_th = ")
         rospy.loginfo(goal_idx_th)
