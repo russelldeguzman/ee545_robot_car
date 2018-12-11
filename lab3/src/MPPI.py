@@ -136,6 +136,11 @@ class MPPIController:
             .view(1, -1)
             .repeat(self.K, 1)
         )
+        # self.time_derate = (
+        #     torch.zeros(self.K, self.T)
+        # )
+        # self.time_derate[:, -1] = 1
+
         # control outputs
         self.msgid = 0
 
@@ -253,22 +258,22 @@ class MPPIController:
         )
         print("Current Pose: ", self.last_pose)
         print("SETTING Goal: ", self.goal)
-        in_bounds_test = np.zeros((2, 2), dtype=np.bool)
-        in_bounds_test[:, 0] = True
-        map_xy_test = Utils.world_to_map_torch(
-            torch.tensor(self.goal, dtype=self.dtype, device=self.device)
-            .view(-1, 3)
-            .repeat(2, 1),
-            self.map_info,
-            self.device,
-        ).view(-1, 2)
-        in_bounds_test[:, 1] = self.permissible_region[
-            map_xy_test[:, 1].numpy(), map_xy_test[:, 0].numpy()
-        ]
-        first_oob_test = np.argmin(in_bounds_test, axis=1)
-        # print(' ')
-        rospy.loginfo("clicked_bounds_check = {}".format(first_oob_test))
-        # print(' ')
+        # in_bounds_test = np.zeros((2, 2), dtype=np.bool)
+        # in_bounds_test[:, 0] = True
+        # map_xy_test = Utils.world_to_map_torch(
+        #     torch.tensor(self.goal, dtype=self.dtype, device=self.device)
+        #     .view(-1, 3)
+        #     .repeat(2, 1),
+        #     self.map_info,
+        #     self.device,
+        # ).view(-1, 2)
+        # in_bounds_test[:, 1] = self.permissible_region[
+        #     map_xy_test[:, 1].numpy(), map_xy_test[:, 0].numpy()
+        # ]
+        # first_oob_test = np.argmin(in_bounds_test, axis=1)
+        # # print(' ')
+        # rospy.loginfo("clicked_bounds_check = {}".format(first_oob_test))
+        # # print(' ')
 
     def compute_costs(self):
         pose_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
@@ -320,7 +325,7 @@ class MPPIController:
             self.goal, dtype=self.dtype, device=self.device
         )  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
         # print('cart_off', cart_off.shape)
-        dist_cost_all = (
+        dist_cost_all = torch.sqrt(
             cart_off[:, :, 0] ** 2 + cart_off[:, :, 1] ** 2
         )  # Calculates magnitude of distance from goal
         # print(dist_cost_all.shape)
@@ -581,16 +586,16 @@ class MPPIController:
             ]
             self.nom_path_pub.publish(pa)
 
-        # ### FOR DEBUG ONLY. REMOVE TO RUN ON CAR ###
-        # val_map_disp = self.permissible_region.copy()
-        # val_map_disp = (val_map_disp.astype(np.int8) * 255).astype(np.int8)
-        # val_map_disp = val_map_disp.astype(np.int8)
-        # og = OccupancyGrid()
-        # og.header = Utils.make_header('map')
-        # og.info = self.map_info
-        # og.data = val_map_disp.flatten().astype(np.int8).tolist()
-        # print(type(og.data[0]))
-        # self.cost_pub.publish(og)
+        ### FOR DEBUG ONLY. REMOVE TO RUN ON CAR ###
+        val_map_disp = self.permissible_region.copy()
+        val_map_disp = (val_map_disp.astype(np.int8) * 255).astype(np.int8)
+        val_map_disp = val_map_disp.astype(np.int8)
+        og = OccupancyGrid()
+        og.header = Utils.make_header('map')
+        og.info = self.map_info
+        og.data = val_map_disp.flatten().astype(np.int8).tolist()
+        print(type(og.data[0]))
+        self.cost_pub.publish(og)
 
 
 if __name__ == "__main__":
