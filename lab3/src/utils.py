@@ -195,9 +195,9 @@ def world_to_map_torch(poses, map_info, device):
     map_poses /= scale
 
     if angle == 0:
+      map_poses = map_poses.type(dtype=torch.int32)
       map_poses[:, 0] = map_poses[:, 0].clamp(0, map_info.width - 1)
       map_poses[:, 1] = map_poses[:, 1].clamp(0, map_info.height - 1)
-      map_poses = map_poses.type(dtype=torch.int32)
       return map_poses
 
     # Rotation
@@ -207,9 +207,10 @@ def world_to_map_torch(poses, map_info, device):
     temp = map_poses[:,0].clone()
     map_poses[:,0] = c*map_poses[:,0] - s*map_poses[:,1]
     map_poses[:,1] = s*temp + c*map_poses[:,1]
+    map_poses = map_poses.type(dtype=torch.int32)
     map_poses[:, 0] = map_poses[:, 0].clamp(0, map_info.height - 1)
     map_poses[:, 1] = map_poses[:, 1].clamp(0, map_info.width - 1)
-    map_poses = map_poses.type(dtype=torch.int32)
+
     return map_poses
 
 def describe(var_list):
