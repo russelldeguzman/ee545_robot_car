@@ -23,9 +23,14 @@ from geometry_msgs.msg import (
     PoseStamped,
     PoseWithCovarianceStamped,
 )
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, OccupancyGrid
 from nav_msgs.srv import GetMap
 from vesc_msgs.msg import VescStateStamped
+
+import matplotlib.pyplot as plt
+from scipy import ndimage
+
+COST_MAP_TOPIC = "/mppi/occupancy_grid"
 
 
 class MPPIController:
@@ -58,6 +63,12 @@ class MPPIController:
         # )
         self.STEER_ANGLE_MIN = -0.34
         self.STEER_ANGLE_MAX = 0.341
+        self.MAX_REVERSE_SPEED = self.erpm2mps(
+            float(rospy.get_param("/vesc/vesc_driver/speed_min"))
+        )
+        self.MAX_FWD_SPEED = self.erpm2mps(
+            float(rospy.get_param("/vesc/vesc_driver/speed_max"))
+        )
         self.CAR_LENGTH = 0.33
         self.OOB_COST = 100000  # Cost associated with an out-of-bounds pose
         self.MAX_SPEED = 5.0  # TODO NEED TO FIGURE OUT ACTUAL FIGURE FOR THIS
@@ -68,8 +79,8 @@ class MPPIController:
         self.T = T  # Length of rollout horizon
         self.K = K  # Number of sample rollouts
         self.sigma = torch.tensor(
-            [[0.001, 0.0], [0.0, 0.01]], dtype=self.dtype, device=self.device
-        )
+            [[0.3, 0.0], [0.0, 0.2]], dtype=self.dtype, device=self.device
+        )  # [[Speed_variance, 0], [[0, steer_variance]]]
         # self.sigma = 0.05 * torch.eye(2)  # NOTE: DEBUG
         self._lambda = torch.tensor(_lambda, dtype=self.dtype, device=self.device)
         self.dt = None
@@ -82,6 +93,8 @@ class MPPIController:
         self.missed_msgs = 0
         self.max_angle = -10000.0
         self.min_angle = 10000.0
+
+        self.map_xy = torch.zeros(self.K, self.T, dtype=torch.int32)
 
         # PyTorch / GPU data configuration
         # TODO
@@ -107,27 +120,32 @@ class MPPIController:
             self.T, 2, dtype=self.dtype, device=self.device
         )
         self.noise_dist = torch.distributions.multivariate_normal.MultivariateNormal(
-            torch.zeros(2, dtype=self.dtype, device=self.device), self.sigma
+            torch.zeros(2, dtype=self.dtype, device=self.device), scale_tril=self.sigma
         )
         self.noise = torch.zeros(
             self.K, self.T, 2, dtype=self.dtype, device=self.device
         )
-        self.cost = torch.zeros(
-            self.K, dtype=self.dtype, device=self.device
-        )
+        self.cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
         self.nominal_rollout = torch.zeros(
             self.T, 3, dtype=self.dtype, device=self.device
         )
         self.time_derate = (
-            torch.arange(start=1, end=self.T + 1, step=1, dtype=self.dtype, device=self.device)
+            torch.arange(
+                start=1, end=self.T + 1, step=1, dtype=self.dtype, device=self.device
+            )
             .view(1, -1)
             .repeat(self.K, 1)
         )
+        # self.time_derate = (
+        #     torch.zeros(self.K, self.T)
+        # )
+        # self.time_derate[:, -1] = 1
+
         # control outputs
         self.msgid = 0
 
         # visualization paramters
-        self.num_viz_paths = 40
+        self.num_viz_paths = 10
         if self.K < self.num_viz_paths:
             self.num_viz_paths = self.K
 
@@ -144,6 +162,11 @@ class MPPIController:
         self.nom_path_pub = rospy.Publisher("/mppi/nominal", Path, queue_size=1)
 
         # Use the 'static_map' service (launched by MapServer.launch) to get the map
+
+        BAD_WAYPOINTS_MAP = np.flipud(np.array(
+            [[1910, 340], [1500, 210], [1520, 435], [1130, 400], [670, 840]],
+            dtype=np.int32
+        ))
         map_service_name = rospy.get_param("~static_map", "static_map")
         print("Getting map from service: ", map_service_name)
         rospy.wait_for_service(map_service_name)
@@ -159,13 +182,54 @@ class MPPIController:
         array_255 = np.array(map_msg.data).reshape(
             (map_msg.info.height, map_msg.info.width)
         )
-        self.permissible_region = np.zeros_like(array_255, dtype=bool)
+        self.permissible_region = np.zeros_like(array_255, dtype=int)
         self.permissible_region[
             array_255 == 0
         ] = 1  # Numpy array of dimension (map_msg.info.height, map_msg.info.width),
         # With values 0: not permissible, 1: permissible
-        x_perm, y_perm = np.where(self.permissible_region == 1)
-        self.permit_coords = np.vstack((x_perm, y_perm)).T
+        # plt.imshow(self.permissible_region)
+        # plt.show()
+
+        # How much to dilate in the real world
+        radiusBuffer = 0.5
+        MAX_VAL_COLLIDE = 1000
+        MIN_VAL_SPACE = 100
+        sigma_pixels = 5
+        sigma_find_pixels = 100
+
+        # Convert the bool map_img to int map_img
+        self.permissible_region = np.logical_not(self.permissible_region)
+
+        # convert radiusBuffer from meters to pixels
+        radiusBufferPxl = int(radiusBuffer / self.map_info.resolution)
+
+        # Filter out bad pixels
+        for n in range(2):
+            self.permissible_region = ndimage.binary_opening(
+                self.permissible_region
+            ).astype(np.int)
+
+        # Add positions of bad waypoints (needs to be done after filtering step since they're roughly point sinc's)
+        self.permissible_region = np.flipud(self.permissible_region)
+        # plt.subplot(2,1,1)
+        # plt.imshow(self.permissible_region.astype(np.int))
+        for pt in BAD_WAYPOINTS_MAP:
+            self.permissible_region[(pt[1] - 7):(pt[1] + 7), (pt[0] - 7):(pt[0] + 7)] = True  # 7 px in the bounds frame is the approximate size of the target, assuming a 1 foot x 1 foot target (actual targets are slightly smaller)
+        self.permissible_region = np.flipud(self.permissible_region)
+
+        # Dilate the walls to add extra buffer
+        for n in range(radiusBufferPxl):
+            self.permissible_region = ndimage.binary_dilation(
+                self.permissible_region
+            ).astype(np.int)
+
+        self.permissible_region = np.logical_not(self.permissible_region).astype(
+            np.bool
+        )
+        # plt.subplot(2,1,2)
+        # plt.imshow(self.permissible_region.astype(np.int))
+        # plt.show()
+        self.cost_pub = rospy.Publisher(COST_MAP_TOPIC, OccupancyGrid, queue_size=1)
 
         print("Making callbacks")
         self.goal_sub = rospy.Subscriber(
@@ -175,6 +239,10 @@ class MPPIController:
             "/pf/viz/inferred_pose", PoseStamped, self.mppi_cb, queue_size=1
         )
         print("Done Initializing")
+
+    def erpm2mps(self, erpm):
+        mps = (erpm - self.SPEED_TO_ERPM_OFFSET) / self.SPEED_TO_ERPM_GAIN
+        return mps
 
     # TODO
     # You may want to debug your bounds checking code here, by clicking on a part
@@ -190,48 +258,69 @@ class MPPIController:
         )
         print("Current Pose: ", self.last_pose)
         print("SETTING Goal: ", self.goal)
+        # in_bounds_test = np.zeros((2, 2), dtype=np.bool)
+        # in_bounds_test[:, 0] = True
+        # map_xy_test = Utils.world_to_map_torch(
+        #     torch.tensor(self.goal, dtype=self.dtype, device=self.device)
+        #     .view(-1, 3)
+        #     .repeat(2, 1),
+        #     self.map_info,
+        #     self.device,
+        # ).view(-1, 2)
+        # in_bounds_test[:, 1] = self.permissible_region[
+        #     map_xy_test[:, 1].numpy(), map_xy_test[:, 0].numpy()
+        # ]
+        # first_oob_test = np.argmin(in_bounds_test, axis=1)
+        # # print(' ')
+        # rospy.loginfo("clicked_bounds_check = {}".format(first_oob_test))
+        # # print(' ')
 
     def compute_costs(self):
         pose_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
         bounds_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
         ctrl_cost = torch.zeros(self.K, dtype=self.dtype, device=self.device)
+        in_bounds = np.zeros((self.K, self.T + 1), dtype=np.bool)
 
         ### COMMENTED OUT FOR TESTING ###
         pose_cost = torch.sum(
-            (torch.abs(self.controls[:, :, 0]) - self.MAX_SPEED) ** 2, dim=1
+            (self.controls[:, :, 0] - self.MAX_SPEED) ** 2, dim=1
         )  # TODO: this will be much better if we can output speed as a predicted state parameter from MPC
 
         ctrl_cost = self._lambda * torch.sum(
-            torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma))
-            * torch.abs(self.noise),
-            dim=(1, 2),
+            torch.sum(
+                torch.matmul(torch.abs(self.nominal_control), torch.inverse(self.sigma))
+                * torch.abs(self.noise),
+                dim=2,
+            ),
+            dim=1,
         )  # This is verified to give same result as the looped code shown in the spec
 
-        total_in_bounds = 0
-        # TODO: Probably need a vectorized way of doing this
-        for k in xrange(self.K):
-            # map_poses = self.rollouts[k, :, :].clone().numpy()
-            map_poses = self.rollouts[k, :, :].cpu().numpy()
-            map_poses = map_poses.copy()
-            Utils.world_to_map(
-                map_poses, self.map_info
-            )  # NOTE: Clone required here since world_to_map operates in place
-            map_poses = np.round(map_poses).astype(int)
-            try:
-                first_oob = np.argmin(
-                    self.permissible_region[map_poses[:, 1], map_poses[:, 0]]
-                )
-                # print("first_oob:")
-                # print(first_oob)
-                # n_in_bounds = np.sum(self.permissible_region[map_poses[:,1], map_poses[:,0]])
-            except IndexError:
-                bounds_cost[k] = self.OOB_COST
-                continue
-            # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
-            # if n_in_bounds < map_poses.shape[0]:
-            #   bounds_cost[k] = self.OOB_COST
-            if first_oob > 0:
-                bounds_cost[k] = self.OOB_COST * (self.T - first_oob)
+        map_xy = Utils.world_to_map_torch(
+            self.rollouts.view(-1, 3), self.map_info, self.device
+        ).view(self.K, self.T + 1, 2)
+        # print('map_xy:', map_xy[0, 0, :])
+        # in_bounds[:] = self.permissible_region[map_xy[:,:, 1].numpy(), map_xy[:,:,0].numpy()]  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
+        in_bounds[:] = self.permissible_region[
+            map_xy[:, :, 1].numpy(), map_xy[:, :, 0].numpy()
+        ].reshape(
+            self.K, self.T + 1
+        )  # Evaluates whether the y, x coordinates of the pose in the bounds frame are in bounds. torch.clamp assures lookup will be within array range
+        # print('in_bounds type:', in_bounds.dtype)
+        # print('in_bounds', in_bounds[0, 0])
+        # print('in_bounds shape', in_bounds.shape)
+        # if np.any(np.logical_not(in_bounds)):
+        #     print('{} OOB Points found!'.format(np.sum(np.logical_not(in_bounds))))
+        first_oob = np.argmin(in_bounds, axis=1)
+
+        # total_in_bounds += n_in_bounds  # TODO: Can potentially use this later to live-alter the value of self.sigma to prevent more than a certain fraction of total rolled out poses from going out of bounds
+        # if n_in_bounds < map_poses.shape[0]:
+        #   bounds_cost[k] = self.OOB_COST
+        bounds_cost = torch.tensor(
+            np.where(first_oob > 0, self.OOB_COST * (self.T - first_oob), bounds_cost),
+            dtype=self.dtype,
+            device=self.device,
+        )
+
         cart_off = self.rollouts[:, 1:, :] - torch.tensor(
             self.goal, dtype=self.dtype, device=self.device
         )  # Cartesian offset between [X, Y, theta]_rollout[k] and [X, Y, theta]_goal
@@ -242,25 +331,25 @@ class MPPIController:
         # print(dist_cost_all.shape)
         # print(self.time_derate.shape)
         dist_cost = torch.sum(dist_cost_all * self.time_derate, dim=1)
-        assert np.all(
-            np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)
-        ), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(
-            pose_cost.shape, ctrl_cost.shape, bounds_cost.shape
-        )
+        # assert np.all(
+        #     np.equal([pose_cost.shape, ctrl_cost.shape, bounds_cost.shape], self.K)
+        # ), "Shape of cost components != (self.K)\n pose_cost.shape = {}\n ctrl_cost.shape = {}\n bounds_cost.shape = {}\n".format(
+        #     pose_cost.shape, ctrl_cost.shape, bounds_cost.shape
+        # )
         # describe([pose_cost, ctrl_cost, bounds_cost, dist_cost])
         # print("Costs:")
         for cost, name in zip(
             [pose_cost, ctrl_cost, bounds_cost, dist_cost],
             ["pose_cost", "ctrl_cost", "bounds_cost", "dist_cost"],
         ):
-            if np.any(np.isnan(cost)):
-                assert False, "NaNs in output: {}".format(name)
+            # if np.any(np.isnan(cost)):
+            #     assert False, "NaNs in output: {}".format(name)
 
             if (name == "bounds_cost") and (torch.max(cost) > 0):
                 cost = cost / torch.min(cost[torch.nonzero(cost)])
-                assert (
-                    torch.min(cost[torch.nonzero(cost)]) >= 1.0
-                ), "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
+                # assert (
+                #     torch.min(cost[torch.nonzero(cost)]) >= 1.0
+                # ), "bounds_cost is < 1: bounds_cost = {}".format(torch.min(cost))
                 # print(name)
                 # print(cost)
                 continue
@@ -271,7 +360,9 @@ class MPPIController:
                 cost = cost / cost_max
             # print(name)
             # print(cost)
-        self.cost = (pose_cost) + (ctrl_cost) + (bounds_cost * 1000) + (2 * dist_cost)
+        self.cost = (
+            (pose_cost) + (4 * ctrl_cost) + (bounds_cost * 1000) + (20 * dist_cost)
+        )
 
     def mm_step(self, states, controls):
 
@@ -307,11 +398,11 @@ class MPPIController:
         states_next[:, 1] = states[:, 1] + dy
         # states[:, 2] += dtheta + np.random.normal(loc=0.0, scale=KM_THETA_FIX_NOISE, size=states.shape[0])
         states_next[:, 2] = ((states[:, 2] + dtheta + np.pi) % (2 * np.pi)) - np.pi
-        assert torch.all(
-            (states_next[:, 2] <= np.pi) | (states_next[:, 2] >= -np.pi)
-        ), "states_next[:,2] = {} (not within the range [-pi, pi])".format(
-            states_next[:, 2]
-        )
+        # assert torch.all(
+        #     (states_next[:, 2] <= np.pi) | (states_next[:, 2] >= -np.pi)
+        # ), "states_next[:,2] = {} (not within the range [-pi, pi])".format(
+        #     states_next[:, 2]
+        # )
 
         return states_next
 
@@ -331,7 +422,7 @@ class MPPIController:
             )
         print("Done")
 
-    def mppi(self, init_pose):
+    def mppi(self, init_pose=None):
         t0 = time.time()
         # NOTE:
         # Network input can be:
@@ -358,7 +449,7 @@ class MPPIController:
         # reasonable amount of calculations done (T = 40, K = 2000) within the 100ms
         # between inferred-poses from the particle filter.
         self.noise = self.noise_dist.rsample(
-            self.noise.shape[:-1]
+            (self.K, self.T)
         )  # Generates a self.K x self.T x2 matrix of noise sampled from self.noise_dist
         # self.noise[0, :, :] = torch.zeros(self.T, 2) # Make sure the current nominal trajectory is considered as one of the possible rollouts
 
@@ -370,9 +461,12 @@ class MPPIController:
         self.controls = (
             self.nominal_control.repeat(torch.Size([self.K, 1, 1])) + self.noise
         )
-        self.controls[:, :, 1] = torch.clamp(self.controls[:, :, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
-
-        assert self.nominal_control.repeat(self.K, 1, 1).shape == (self.K, self.T, 2)
+        self.controls[:, :, 1] = torch.clamp(
+            self.controls[:, :, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX
+        )
+        self.controls[:, :, 0] = torch.clamp(
+            self.controls[:, :, 0], self.MAX_REVERSE_SPEED, self.MAX_FWD_SPEED
+        )
         self.cost = torch.zeros(K, dtype=self.dtype, device=self.device)
 
         self.do_rollouts()  # Perform rollouts from current state, update self.rollouts in place
@@ -381,28 +475,28 @@ class MPPIController:
 
         # Perform the MPPI weighting on your calculated costs
         beta = torch.min(self.cost)
-        assert beta >= 0, "Minimum cost is < 0. beta = {}".format(beta)
+        # assert beta >= 0, "Minimum cost is < 0. beta = {}".format(beta)
 
-        self.cost = self.cost - beta
+        self.cost -= beta
         self.weights = torch.zeros_like(self.cost)
         self.weights = torch.exp((-1.0 / self._lambda) * (self.cost))
         self.weights = self.weights / torch.sum(self.weights)
 
-        assert (
-            torch.abs(torch.sum(self.weights) - 1) < 1e-5
-        ), "self.weights sums to {} (not == 1)".format(torch.sum(self.weights))
-        # Generate the new nominal control
-        for t in xrange(self.T):
-            self.nominal_control[t] = self.nominal_control[t] + torch.sum(
-                self.noise[:, t, :] * self.weights.view(self.K, 1).repeat(1, 2), dim=0
-            )
+        # assert (
+        #     torch.abs(torch.sum(self.weights) - 1) < 1e-5
+        # ), "self.weights sums to {} (not == 1)".format(torch.sum(self.weights))
 
-        for t in xrange(self.T):
-            self.nominal_rollout[t] = torch.sum(
-                self.rollouts[:, t, :] * self.weights.view(self.K, 1).repeat(1, 3),
-                dim=0,
-            )
-        self.nominal_control[:, 1] = torch.clamp(self.nominal_control[:, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX)
+        # Generate the new nominal control
+        self.nominal_control += torch.sum(
+            self.noise * self.weights.view(self.K, 1, 1).repeat(1, self.T, 2), dim=0
+        )  # This mess with self.weights is just to expand it to match self.noise [self.K x self.T x 2]
+        self.nominal_rollout = torch.sum(
+            self.rollouts * self.weights.view(self.K, 1, 1).repeat(1, self.T + 1, 3),
+            dim=0,
+        )
+        self.nominal_control[:, 1] = torch.clamp(
+            self.nominal_control[:, 1], self.STEER_ANGLE_MIN, self.STEER_ANGLE_MAX
+        )
         run_ctrl = self.nominal_control[0].clone()
         self.nominal_control = torch.cat(
             (self.nominal_control[1:, :], self.nominal_control[-1, :].view(1, 2))
@@ -432,8 +526,6 @@ class MPPIController:
             return
 
         theta = Utils.quaternion_to_angle(msg.pose.orientation)
-        self.min_angle = min(theta, self.min_angle)
-        self.max_angle = max(theta, self.max_angle)
         curr_pose = np.array([msg.pose.position.x, msg.pose.position.y, theta])
 
         pose_dot = curr_pose - self.last_pose  # get state
@@ -459,31 +551,31 @@ class MPPIController:
 
         self.send_controls(run_ctrl[0], run_ctrl[1])
         self.state_lock.release()
-        self.visualize()
+        # self.visualize()
 
     def send_controls(self, speed, steer):
         print("Speed:", speed, "Steering:", steer)
         ctrlmsg = AckermannDriveStamped()
         ctrlmsg.header = Utils.make_header("map")
         ctrlmsg.header.seq = self.msgid
-        ctrlmsg.drive.steering_angle = steer
-        ctrlmsg.drive.speed = speed
+        ctrlmsg.drive.steering_angle = np.where(np.isnan(steer), 0, steer)
+        ctrlmsg.drive.speed = np.where(np.isnan(speed), 0, speed)
         self.ctrl_pub.publish(ctrlmsg)
         self.msgid += 1
 
     # Publish some paths to RVIZ to visualize rollouts
     def visualize(self):
-        print("Running viz")
-        # if self.path_pub.get_num_connections() > 0:
-        #     frame_id = "map"
-        #     pa = Path()
-        #     pa.header = Utils.make_header(frame_id)
-        #     for i in range(0, self.num_viz_paths):
-        #         pa.poses = [
-        #             Utils.particle_to_posestamped(pose, frame_id)
-        #             for pose in self.rollouts[i, :, :]
-        #         ]
-        #         self.path_pub.publish(pa)
+        # print("Running viz")
+        if self.path_pub.get_num_connections() > 0:
+            frame_id = "map"
+            pa = Path()
+            pa.header = Utils.make_header(frame_id)
+            for i in range(0, self.num_viz_paths):
+                pa.poses = [
+                    Utils.particle_to_posestamped(pose, frame_id)
+                    for pose in self.rollouts[i, :, :]
+                ]
+                self.path_pub.publish(pa)
         if self.nom_path_pub.get_num_connections() > 0:
             frame_id = "map"
             pa = Path()
@@ -494,31 +586,29 @@ class MPPIController:
             ]
             self.nom_path_pub.publish(pa)
 
-def test_MPPI(mp, N, goal=np.array([0.0, 0.0, 0.0])):
-    init_input = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-    pose = np.array([0.0, 0.0, 0.0])
-    mp.goal = goal
-    print("Start:", pose)
-    mp.ctrl.zero_()
-    last_pose = np.array([0.0, 0.0, 0.0])
-    for i in range(0, N):
-        # ROLLOUT your MPPI function to go from a known location to a specified
-        # goal pose. Convince yourself that it works.
-
-        print("Now:", pose)
-    print("End:", pose)
+        ### FOR DEBUG ONLY. REMOVE TO RUN ON CAR ###
+        val_map_disp = self.permissible_region.copy()
+        val_map_disp = (val_map_disp.astype(np.int8) * 255).astype(np.int8)
+        val_map_disp = val_map_disp.astype(np.int8)
+        og = OccupancyGrid()
+        og.header = Utils.make_header('map')
+        og.info = self.map_info
+        og.data = val_map_disp.flatten().astype(np.int8).tolist()
+        print(type(og.data[0]))
+        self.cost_pub.publish(og)
 
 
 if __name__ == "__main__":
     rospy.init_node("mppi", anonymous=True)  # Initialize the node
 
-    T = 20
-    K = 2024
+    T = 60
+    K = 1024
     sigma = 0.05  # These values will need to be tuned
     _lambda = 1.0
 
     mppi = MPPIController(T, K, sigma, _lambda)
     while not rospy.is_shutdown():  # Keep going until we kill it
         # Callbacks are running in separate threads
+        mppi.visualize()
         rospy.sleep(1)
 

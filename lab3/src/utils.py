@@ -11,6 +11,7 @@ from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, P
 import tf.transformations
 import tf
 import matplotlib.pyplot as plt
+import torch
 
 # Note that not all of these functions are necessary
 
@@ -174,6 +175,43 @@ def world_to_map(poses, map_info):
     poses[:,0] = c*poses[:,0] - s*poses[:,1]
     poses[:,1] = s*temp       + c*poses[:,1]
     poses[:,2] += angle
+
+''' 
+Convert array of poses in the world to pixel locations in the map image 
+  pose: The poses in the world to be converted. Should be a nx3 numpy array
+  map_info: Info about the map (returned by get_map)
+'''    
+def world_to_map_torch(poses, map_info, device):
+    map_poses = poses[:, :2].clone()
+    map_poses= map_poses.clamp(-60, 60).view(-1, 2) # This is just a super-conservative clamp on the x and y position in meters to hopefully solve a very occasional overflow issue
+    scale = torch.tensor(map_info.resolution, dtype=torch.float, device=device)
+    angle = torch.tensor(-quaternion_to_angle(map_info.origin.orientation), dtype=torch.float, device=device)
+
+    # Translation
+    map_poses[:,0] -= torch.tensor(map_info.origin.position.x, dtype=torch.float, device=device)
+    map_poses[:,1] -= torch.tensor(map_info.origin.position.y, dtype=torch.float, device=device)
+
+    # Scale
+    map_poses /= scale
+
+    if angle == 0:
+      map_poses = map_poses.type(dtype=torch.int32)
+      map_poses[:, 0] = map_poses[:, 0].clamp(0, map_info.width - 1)
+      map_poses[:, 1] = map_poses[:, 1].clamp(0, map_info.height - 1)
+      return map_poses
+
+    # Rotation
+    c, s = torch.cos(angle), torch.sin(angle)
+    
+    # Store the x coordinates since they will be overwritten
+    temp = map_poses[:,0].clone()
+    map_poses[:,0] = c*map_poses[:,0] - s*map_poses[:,1]
+    map_poses[:,1] = s*temp + c*map_poses[:,1]
+    map_poses = map_poses.type(dtype=torch.int32)
+    map_poses[:, 0] = map_poses[:, 0].clamp(0, map_info.height - 1)
+    map_poses[:, 1] = map_poses[:, 1].clamp(0, map_info.width - 1)
+
+    return map_poses
 
 def describe(var_list):
     # Name code taken from here: https://stackoverflow.com/questions/18425225/getting-the-name-of-a-variable-as-a-string/18425523
