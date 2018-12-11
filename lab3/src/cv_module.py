@@ -260,7 +260,7 @@ class RBFilter:
     def image_cb(self,data):
         # print('callback')
         try:
-            self.rgb_img = self.bridge.imgmsg_to_cv2(data, "bgr8")
+            self.rgb_img = cv2.resize(self.bridge.imgmsg_to_cv2(data, "bgr8"), fx=0.5, fy=0.5, interpolation=INTER_LINEAR) 
         except CvBridgeError as e:
             print(e)
 
